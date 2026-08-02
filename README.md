@@ -1,5 +1,11 @@
 # Road to 75
 
+**Live:** https://mls-road-to-75.netlify.app
+
+> Currently private — the "75 Points" Netlify team has team-wide site protection
+> on, so the URL asks for a Netlify sign-in. To open it up to everyone, set
+> **Team settings → Site protection** to public in the Netlify dashboard.
+
 A static, mobile-first MLS spin-team game in the spirit of the [7-0 World Cup game](https://7a0.com.br/en)
 and the 82-0 NBA game. Spin your way through every MLS team-season since 2013,
 draft a 14-man squad out of whatever the slot machine gives you, then run a 2026
