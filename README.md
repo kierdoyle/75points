@@ -81,6 +81,9 @@ npm run build      # -> dist/
 npm run sanity     # headless calibration + 500-draft balance check
 ```
 
+The Netlify project is connected to this repo, so **pushing to `main`
+auto-deploys** (`npm run build` → `dist`). Pull requests get deploy previews.
+
 Rebuilding the data (needs the ASA client — `pip install itscalledsoccer pandas`):
 
 ```bash
