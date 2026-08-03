@@ -142,7 +142,7 @@ function setupScreen() {
         <div class="opts" style="margin-top:8px" data-group="difficulty">
           ${Object.entries(DIFFICULTIES).map(([k, d]) => `
             <button class="opt" data-val="${k}" aria-pressed="${S.difficulty === k}">
-              <b>${d.label}</b><span>${d.rerolls} reroll${d.rerolls > 1 ? 's' : ''}<br>${d.note}</span>
+              <b>${d.label}</b><span>${rerollLabel(d.rerolls)}<br>${d.note}</span>
             </button>`).join('')}
         </div>
       </div>
@@ -187,6 +187,8 @@ function setupScreen() {
     startDraft();
   });
 }
+
+const rerollLabel = (n) => (n === 0 ? 'No rerolls' : `${n} reroll${n > 1 ? 's' : ''}`);
 
 const shape = (f) => ({
   '4-3-3': 'Wide + a 9', '4-4-2': 'Two banks', '4-2-3-1': 'Double pivot',
@@ -288,7 +290,8 @@ function spinPane(spin, animate = false) {
     </div>
     <div class="between" style="margin:14px 0 6px">
       <div class="eyebrow">Pick one player</div>
-      <button class="btn ghost sm" id="reroll" ${!S.rerolls || animate ? 'disabled' : ''}>↻ Reroll (${S.rerolls})</button>
+      ${S.rules.rerolls === 0 ? '<span class="dim" style="font-size:11.5px">No rerolls — take one</span>'
+    : `<button class="btn ghost sm" id="reroll" ${!S.rerolls || animate ? 'disabled' : ''}>↻ Reroll (${S.rerolls})</button>`}
     </div>
     <div class="roster${animate ? ' pending' : ''}">
       ${groups.map(([pos, list]) => `

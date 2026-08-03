@@ -15,7 +15,7 @@ import {
 } from '../src/rules.js';
 import { achievements } from '../src/achievements.js';
 import { loadPool, makeRng, drawSpin, currentRosters } from '../src/pool.js';
-import { openSlotsFor, blockReason } from '../src/rules.js';
+import { openSlotsFor, blockReason, effectiveScore } from '../src/rules.js';
 import {
   simSeason, simMatch, squadStrength, K_STRENGTH, SEASON_GAMES, TARGET_POINTS,
 } from '../src/sim.js';
@@ -34,24 +34,50 @@ const FORMATION_NAMES = Object.keys(FORMATIONS);
 
 // ---------------------------------------------------------------- draft bots
 
+// A drafter who is paying attention burns a reroll when the board's best
+// option, valued in the slot it would actually fill, is below this.
+const REROLL_THRESHOLD = 2.0;
+
+/** The best a spin has to offer, after slot penalties. */
+function bestScore(legal, squad) {
+  let best = -Infinity;
+  for (const p of legal) {
+    for (const o of openSlotsFor(p, squad)) {
+      const sc = effectiveScore(p, o.slot.pos);
+      if (sc > best) best = sc;
+    }
+  }
+  return best;
+}
+
 /**
  * Run a full 14-pick draft.
- *   strategy 'random' -- pick a legal player at random (a careless drafter)
+ *   strategy 'random' -- pick a legal player at random, never rerolls
  *   strategy 'greedy' -- always take the highest-scoring legal player
  *   strategy 'good'   -- take the best of a random 3 (a decent human)
+ *
+ * Anyone but the careless drafter spends rerolls on a weak board, so the
+ * difficulty modes are actually exercised.
  */
 function draft(strategy, rng, rules = DIFFICULTIES.normal) {
   const formation = FORMATION_NAMES[Math.floor(rng() * FORMATION_NAMES.length)];
   const squad = makeSquad(formation);
   const picked = new Set();
   let dead = 0;
+  let rerolls = strategy === 'random' ? 0 : rules.rerolls;
 
   for (let n = 0; n < SQUAD_SIZE; n++) {
-    const { spin, skipped } = drawSpin(pool, squad, picked, rng, rules);
+    let { spin, skipped } = drawSpin(pool, squad, picked, rng, rules);
     dead += skipped.length;
     if (!spin) throw new Error(`draft soft-locked after ${n} picks (${rules.label})`);
 
-    const legal = spin.roster.filter((p) => blockReason(p, squad, picked, rules) === null);
+    let legal = spin.roster.filter((p) => blockReason(p, squad, picked, rules) === null);
+    while (rerolls > 0 && bestScore(legal, squad) < REROLL_THRESHOLD) {
+      rerolls--;
+      ({ spin, skipped } = drawSpin(pool, squad, picked, rng, rules));
+      dead += skipped.length;
+      legal = spin.roster.filter((p) => blockReason(p, squad, picked, rules) === null);
+    }
     if (!legal.length) throw new Error('drawSpin returned a spin with no legal pick');
 
     let choice;
@@ -268,8 +294,14 @@ function main() {
   const gTop = quant(G.topScorer, 0.5);
   const gMax = Math.max(...G.topScorer);
   const share = mean(G.scorerShare);
+  // The MLS single-season record is 34. Beating it should be a rare thrill for
+  // an exceptional squad, so judge the shape of the distribution rather than a
+  // single noisy tail sample.
+  const overRecord = G.topScorer.filter((g) => g > 34).length / G.topScorer.length;
   ok.push(['top scorer is a believable Golden Boot', gTop >= 12 && gTop <= 26, `median ${gTop}`]);
-  ok.push(['nobody posts an absurd goal tally', gMax <= 45, `max ${gMax}`]);
+  ok.push(['the goals record rarely falls', overRecord <= 0.06,
+    `${(overRecord * 100).toFixed(1)}% of seasons beat 34`]);
+  ok.push(['no runaway goal tallies', gMax <= 50, `max ${gMax}`]);
   ok.push(['one player does not monopolise the goals', share >= 0.18 && share <= 0.36,
     `${(share * 100).toFixed(0)}% of team goals`]);
   ok.push(['top assister is believable', quant(G.topAssist, 0.5) >= 6 && quant(G.topAssist, 0.5) <= 20,

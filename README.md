@@ -25,7 +25,12 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
    |---|---|---|---|
    | Easy | 5 | unlimited | — |
    | Normal | 3 | 3 | — |
-   | Hard | 1 | 3 | yes |
+   | Hard | **none** | 3 | yes |
+
+   Rerolls turn out to be the strongest difficulty lever by some distance —
+   each one is worth about a point of final table position, more than the
+   entire salary cap contributes. Measured with a drafter that actually spends
+   them: 5 rerolls → 74 points median, 3 → 73, none → 70.
 2. **Draft** — each spin lands on a random (team, season) pair drawn from every MLS
    team-season 2013–2026. Take exactly one player from that roster into an open
    slot. 11 starters + 3 subs (one defender, one midfielder, one attacker).
@@ -124,13 +129,13 @@ A pick is refused if it would make the squad impossible to complete legally —
 every empty slot is costed at the senior minimum ($113,400) — so the draft can
 never be spent into a dead end.
 
-**Honest caveat:** the cap is a genuine constraint (a typical hard-mode squad
-spends $3.4M of its $4.2M allocation and carries 2 DPs rather than 3) but it
-barely moves the difficulty — roughly 70 points median against normal's 71.
-Measured across the whole range, from full allocation down to none, a perfect
-draft only falls from 70 to 68 points. Elite g+ players are often cheap
-(goalkeepers, old seasons, youngsters) and the DP tag already absorbs the three
-priciest, so there is little left for the cap to bite on.
+**Honest caveat:** the cap is a genuine constraint — a typical hard-mode squad
+spends $3.4M of its $4.2M allocation and carries 2 DPs rather than 3 — but on
+its own it barely moves the difficulty. Sweeping the allocation from full to
+zero only drags a perfect draft from 70 to 68 points, because elite g+ players
+are often cheap (goalkeepers, old seasons, youngsters) and the DP tag already
+absorbs the three priciest. Hard mode gets most of its bite from having no
+rerolls.
 - **Designated Players**: anyone whose guaranteed compensation that season topped
   **$1.7M**. Max 3 DPs in the squad; a 4th is blocked. The threshold is flat
   across all seasons, so 2013 stars are cheap — a deliberate quirk.

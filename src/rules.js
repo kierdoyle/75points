@@ -39,7 +39,7 @@ export const DIFFICULTIES = {
   normal: { label: 'Normal', rerolls: 3, maxDPs: MAX_DPS, salaryCap: false, note: '3 DPs' },
   hard: {
     label: 'Hard',
-    rerolls: 1,
+    rerolls: 0,
     maxDPs: MAX_DPS,
     salaryCap: true,
     allocation: ALLOCATION_MONEY,
