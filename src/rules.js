@@ -6,16 +6,49 @@ export const DP_THRESHOLD = 1_700_000;
 export const MAX_DPS = 3;
 export const SQUAD_SIZE = 14; // 11 starters + 3 subs
 
+// ------------------------------------------------------- 2026 roster rules
+// Figures from the published 2026 MLS Roster Rules and Regulations. Used only
+// by hard mode, where the squad has to come in cap-compliant.
+const LEAGUE_SALARY_CAP = 6_425_000;
+// The real allocation pools are General ($3.28m), additional U22 GAM (up to
+// $2m) and Targeted ($2.125m); this game folds them into one pot.
+const LEAGUE_ALLOCATION = 6_000_000;
+// Those cover a 20-man senior roster. This squad is 14, so both are scaled to
+// the same money-per-player a real club works with.
+const SENIOR_ROSTER = 20;
+const SQUAD_RATIO = SQUAD_SIZE / SENIOR_ROSTER;
+
+export const SALARY_CAP = Math.round(LEAGUE_SALARY_CAP * SQUAD_RATIO);       // 4,497,500
+export const ALLOCATION_MONEY = Math.round(LEAGUE_ALLOCATION * SQUAD_RATIO); // 4,200,000
+// Per-player figures are not scaled -- they apply to individuals, not rosters.
+export const MAX_BUDGET_CHARGE = 803_125;
+export const SENIOR_MINIMUM = 113_400;
+// Up to three young players can be carried at U22 Initiative rates.
+export const MAX_U22 = 3;
+export const U22_MAX_AGE = 22;
+export const U22_CHARGE_YOUNG = 150_000; // age 20 or younger
+export const U22_CHARGE = 200_000;       // ages 21-22
+
 // Playing a sided player on their wrong flank, or a midfielder one step out of
 // their band, costs them some of their g+.
 export const SIDE_SWAP_PENALTY = 0.20;
 export const OUT_OF_POSITION_PENALTY = 0.10;
 
 export const DIFFICULTIES = {
-  easy: { label: 'Easy', rerolls: 5 },
-  normal: { label: 'Normal', rerolls: 3 },
-  hard: { label: 'Hard', rerolls: 1 },
+  easy: { label: 'Easy', rerolls: 5, maxDPs: Infinity, salaryCap: false, note: 'Unlimited DPs' },
+  normal: { label: 'Normal', rerolls: 3, maxDPs: MAX_DPS, salaryCap: false, note: '3 DPs' },
+  hard: {
+    label: 'Hard',
+    rerolls: 1,
+    maxDPs: MAX_DPS,
+    salaryCap: true,
+    allocation: ALLOCATION_MONEY,
+    note: '3 DPs + salary cap',
+  },
 };
+
+// Everyone gets one look at a fresh set of coaching candidates.
+export const COACH_REROLLS = 1;
 
 export const SIDES = { NONE: 0, LEFT: 1, RIGHT: 2 };
 export const SIDE_LABEL = { 0: '', 1: 'L', 2: 'R' };
@@ -163,17 +196,93 @@ export function canPlay(player, slotPos) {
   return fitFor(player, slotPos) !== null;
 }
 
-/** Why a player can't be drafted right now, or null if they can. */
-export function blockReason(player, squad, pickedIds) {
+/**
+ * Why a player can't be drafted right now, or null if they can.
+ * `rules` is the chosen difficulty; it decides the DP limit and whether the
+ * salary cap is in force.
+ */
+export function blockReason(player, squad, pickedIds, rules = DIFFICULTIES.normal) {
   if (pickedIds.has(player.id)) return 'Already drafted';
   const fits = squad.some((s) => !s.player && canPlay(player, s.pos));
   if (!fits) return 'No open slot';
-  if (player.dp && countDPs(squad) >= MAX_DPS) return 'DP limit reached';
+  if (player.dp && countDPs(squad) >= rules.maxDPs) return 'DP limit reached';
+  if (rules.salaryCap && !capAllows(player, squad, rules.allocation)) return 'No cap space';
   return null;
 }
 
 export function countDPs(squad) {
   return squad.filter((s) => s.player && s.player.dp).length;
+}
+
+// ------------------------------------------------------------ salary cap
+
+const isU22 = (p) => p.age > 0 && p.age <= U22_MAX_AGE;
+const u22Charge = (p) => (p.age <= 20 ? U22_CHARGE_YOUNG : U22_CHARGE);
+
+/**
+ * Work out a squad's budget under the 2026 rules.
+ *
+ * A Designated Player carries the maximum budget charge no matter what they
+ * actually earn -- that is the whole point of the tag. Anyone else earning
+ * more than the maximum charge has to be bought down to it with allocation
+ * money. Up to three players aged 22 or under can be carried at U22
+ * Initiative rates instead, and those slots go to whoever saves the most.
+ * Whatever the squad is still over the cap by comes out of the same
+ * allocation pot.
+ */
+export function budget(squad, allocation = ALLOCATION_MONEY) {
+  const players = squad.filter((s) => s.player).map((s) => s.player);
+
+  // Award the U22 slots where they save the most money.
+  const savings = players
+    .filter((p) => !p.dp && isU22(p) && p.salary > u22Charge(p))
+    .map((p) => ({ p, save: Math.min(p.salary, MAX_BUDGET_CHARGE) - u22Charge(p) }))
+    .sort((a, b) => b.save - a.save)
+    .slice(0, MAX_U22);
+  const u22 = new Set(savings.map((s) => s.p));
+
+  let charge = 0;
+  let buydown = 0;
+  for (const p of players) {
+    if (p.dp) {
+      charge += MAX_BUDGET_CHARGE;
+    } else if (u22.has(p)) {
+      charge += u22Charge(p);
+    } else {
+      charge += Math.min(p.salary, MAX_BUDGET_CHARGE);
+      // Above the maximum charge and not a DP => buy them down.
+      buydown += Math.max(0, p.salary - MAX_BUDGET_CHARGE);
+    }
+  }
+  const over = Math.max(0, charge - SALARY_CAP);
+  const gamUsed = buydown + over;
+  return {
+    charge,
+    buydown,
+    over,
+    gamUsed,
+    gamLeft: allocation - gamUsed,
+    u22: u22.size,
+    compliant: gamUsed <= allocation,
+    u22Ids: new Set([...u22].map((p) => p.id)),
+  };
+}
+
+/**
+ * Could this squad still be completed legally if we added `player`?
+ *
+ * Every slot still empty afterwards is costed at the senior minimum, which is
+ * the cheapest anyone can be. If even that overshoots the allocation pot the
+ * pick is refused, so the draft can never be spent into a dead end.
+ */
+export function capAllows(player, squad, allocation = ALLOCATION_MONEY) {
+  const filled = squad.filter((s) => s.player).length;
+  const remaining = SQUAD_SIZE - filled - 1;
+  const b = budget([...squad.filter((s) => s.player), { player }], allocation);
+  // Cost the empty slots at the senior minimum -- nobody can be cheaper.
+  const charge = b.charge + remaining * SENIOR_MINIMUM;
+  const needed = b.buydown + Math.max(0, charge - SALARY_CAP);
+  return needed <= allocation;
 }
 
 /** Open slots this player may fill, best (cheapest) first. */
@@ -185,9 +294,12 @@ export function openSlotsFor(player, squad) {
 }
 
 /** True if at least one player on this roster can legally be drafted. */
-export function hasEligiblePick(roster, squad, pickedIds) {
-  return roster.some((p) => blockReason(p, squad, pickedIds) === null);
+export function hasEligiblePick(roster, squad, pickedIds, rules = DIFFICULTIES.normal) {
+  return roster.some((p) => blockReason(p, squad, pickedIds, rules) === null);
 }
+
+/** A player who has been listed at more than one position in their career. */
+export const isVersatile = (p) => (p.positions || []).length > 1;
 
 /** Two filled slots may swap only if each player can play the other's slot. */
 export function canSwap(slotA, slotB) {

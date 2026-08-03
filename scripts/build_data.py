@@ -25,6 +25,14 @@ FULL_SEASON_GAMES = 34
 # cheap, which is a gameplay quirk, not a bug.
 DP_THRESHOLD = 1_700_000
 
+# 2026 MLS roster rules (mlssoccer.com/news/2026-mls-roster-rules-and-regulations),
+# used by the hard-mode salary cap.
+SALARY_CAP = 6_425_000
+MAX_BUDGET_CHARGE = 803_125
+SENIOR_MINIMUM = 113_400
+U22_CHARGE_YOUNG = 150_000   # age 20 or younger
+U22_CHARGE = 200_000         # ages 21-25
+
 # Players below this many minutes in a season are dropped from spin rosters:
 # tiny samples make g+ totals noise, and they'd just be filler picks.
 MIN_MINUTES = 180
@@ -165,6 +173,10 @@ def main():
         coaches = json.load(f)
 
     name_by_id = dict(zip(players["player_id"], players["player_name"]))
+    birth_year = {}
+    for pid, bd in zip(players["player_id"], players["birth_date"]):
+        if isinstance(bd, str) and len(bd) >= 4 and bd[:4].isdigit():
+            birth_year[pid] = int(bd[:4])
     team_rows = {
         r["team_id"]: {
             "name": r["team_name"],
@@ -257,9 +269,15 @@ def main():
                 continue
             gc = sal_team.get((pid, tid), sal_player.get(pid))
             is_dp = 1 if (gc is not None and gc > DP_THRESHOLD) else 0
+            # Salary in thousands, and age during that season -- both only used
+            # by the hard-mode salary cap. A player with no salary on record is
+            # charged the senior minimum.
+            salary_k = int(round((gc if gc is not None else SENIOR_MINIMUM) / 1000))
+            by = birth_year.get(pid)
+            age = (int(season) - by) if by else 0
             pool.setdefault(season, {}).setdefault(tid, []).append(
                 [pid, POS_IDX[pos], round(adj, 2), int(round(mins * scale)),
-                 is_dp, side, round(g90, 3), round(a90, 3)]
+                 is_dp, side, round(g90, 3), round(a90, 3), salary_k, age]
             )
 
     # ---- calibration -------------------------------------------------------

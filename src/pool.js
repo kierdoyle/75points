@@ -47,6 +47,8 @@ export function loadPool(raw) {
       side: p[5],   // 0 both/unknown, 1 left, 2 right
       g90: p[6],
       a90: p[7],
+      salary: p[8] * 1000,
+      age: p[9],
       positions: careerPos(p[0]),
       sides: careerSides(p[0]),
       teamId: s.t,
@@ -73,21 +75,21 @@ export function currentRosters(pool) {
  * drafted, or blocked by the DP cap) is dead: we discard it and draw again for
  * free, so a dead spin can never cost a reroll or soft-lock the draft.
  */
-export function drawSpin(pool, squad, pickedIds, rng) {
+export function drawSpin(pool, squad, pickedIds, rng, rules) {
   const skipped = [];
   for (let i = 0; i < 500; i++) {
     const spin = pick(pool.spins, rng);
-    if (hasEligiblePick(spin.roster, squad, pickedIds)) {
+    if (hasEligiblePick(spin.roster, squad, pickedIds, rules)) {
       return { spin, skipped };
     }
     skipped.push(spin);
   }
   // Exhaustive fallback: scan the whole pool rather than ever returning null.
-  const usable = pool.spins.filter((s) => hasEligiblePick(s.roster, squad, pickedIds));
+  const usable = pool.spins.filter((s) => hasEligiblePick(s.roster, squad, pickedIds, rules));
   return { spin: usable.length ? pick(usable, rng) : null, skipped };
 }
 
 /** Annotate a roster with pick eligibility for rendering. */
-export function annotate(roster, squad, pickedIds) {
-  return roster.map((p) => ({ ...p, blocked: blockReason(p, squad, pickedIds) }));
+export function annotate(roster, squad, pickedIds, rules) {
+  return roster.map((p) => ({ ...p, blocked: blockReason(p, squad, pickedIds, rules) }));
 }

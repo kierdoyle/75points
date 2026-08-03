@@ -134,6 +134,38 @@ input[type="text"]:focus { outline: none; border-color: var(--accent); }
 .lead.top .lname { color: var(--gold); }
 @media (max-width: 380px) { .leadgrid { grid-template-columns: 1fr; gap: 10px; } }
 
+/* salary cap */
+.capbar {
+  background: var(--card); border: 1px solid var(--line); border-radius: 11px;
+  padding: 10px 12px; margin-bottom: 12px;
+}
+.mono.red { color: var(--red); }
+.pill.versatile { background: rgba(255,255,255,.07); color: var(--dim); font-weight: 600; }
+
+/* pick confirmation */
+.sheet-inner { position: relative; }
+.sheet-x {
+  position: absolute; top: 10px; right: 10px; width: 30px; height: 30px;
+  border-radius: 50%; background: var(--card-2); color: var(--muted);
+  display: grid; place-items: center; font-size: 14px; line-height: 1;
+}
+.sheet-x:active { background: var(--line); }
+.pickhead { display: flex; align-items: center; gap: 11px; padding-right: 34px; }
+.pickhead .avatar { width: 44px; height: 44px; font-size: 14px; }
+
+/* achievements */
+.achs { display: flex; flex-direction: column; gap: 6px; }
+.ach {
+  display: flex; align-items: baseline; gap: 8px; padding: 7px 10px;
+  border-radius: 9px; background: var(--card-2); border-left: 3px solid var(--line);
+}
+.ach b { font-size: 13px; }
+.ach span { font-size: 11px; color: var(--dim); margin-left: auto; text-align: right; }
+.ach.legendary { border-left-color: var(--gold); background: rgba(255,201,60,.1); }
+.ach.legendary b { color: var(--gold); }
+.ach.gold { border-left-color: var(--accent); }
+.ach.gold b { color: var(--accent); }
+
 /* head coach */
 .coaches { display: flex; flex-direction: column; gap: 10px; }
 .coach {

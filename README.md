@@ -18,8 +18,14 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
 
 ## How it plays
 
-1. **Setup** — pick a difficulty (Easy 5 rerolls / Normal 3 / Hard 1), one of five
-   formations, and the conference your club joins.
+1. **Setup** — pick a difficulty, one of five formations, and the conference your
+   club joins.
+
+   | | Rerolls | DPs | Salary cap |
+   |---|---|---|---|
+   | Easy | 5 | unlimited | — |
+   | Normal | 3 | 3 | — |
+   | Hard | 1 | 3 | yes |
 2. **Draft** — each spin lands on a random (team, season) pair drawn from every MLS
    team-season 2013–2026. Take exactly one player from that roster into an open
    slot. 11 starters + 3 subs (one defender, one midfielder, one attacker).
@@ -30,26 +36,32 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
 
 ### Head coaches
 
-Every coach with 30+ league games is rated on two career percentile ranks:
-**attack** is their average rank for expected goals for, **defence** for
-expected goals against. Those swing the team's goals scored and conceded by up
-to a tenth either way, and a median (50th percentile) coach changes nothing —
-which keeps the league calibration intact, since a random coach averages out
-neutral.
+Every coach with 30+ league games is rated on two career percentile ranks,
+shown as a plain 0–100: **attack** is their average rank for expected goals
+for, **defence** for expected goals against. Those swing the team's goals
+scored and conceded by up to 2.5% either way, and a median (50th percentile)
+coach changes nothing — which keeps the league calibration intact, since a
+random coach averages out neutral. You get one reroll of the shortlist.
 
 | Badge | Earned by | Effect |
 |---|---|---|
-| 🏆 **Playoff Proven** | Won MLS Cup | +5% in the playoffs |
-| 🛡 **Proven Winner** | Won the Supporters' Shield | +5% in the regular season |
+| 🏆 **Playoff Proven** | Won MLS Cup | +2.5% in the playoffs |
+| 🛡 **Proven Winner** | Won the Supporters' Shield | +2.5% in the regular season |
 
 Trophies are read straight out of the games table — the MLS Cup winner is the
 last knockout game of each completed season, the Shield the best regular-season
 record — and all 13 of each since 2013 match the record books.
 
-Note that the coach is a net buff: choosing the best of three skews the draw
-above the median, and the trophy bonuses only ever add. A perfect draft's odds
-of taking 75 points *and* the Cup go from about 6% with no coach to 12% with
-the best of three.
+The coach is a mild net buff — choosing from a shortlist skews the draw above
+the median, and the trophy bonuses only ever add — but at 2.5% the effect is
+small enough not to distort the target.
+
+## Achievements
+
+The season ends with whatever it earned: Invincible for going unbeaten, Record
+Breakers for passing New England's 74 points, Goal Machine for passing LAFC's
+85 goals, Winning Machine, Fortress, Golden Boot, Playmaker and more. The top
+three go into the share text.
 
 ### Draft rules
 
@@ -84,6 +96,41 @@ Sub slots take D←CB/FB, M←DM/CM/AM, A←W/ST.
 
 You can **swap any two drafted players** whose positions are mutually legal,
 both during the draft (Squad tab) and on the review screen before kick-off.
+Every pick is confirmed on a sheet first, so a mistaken tap can be backed out.
+
+### Hard mode: the salary cap
+
+Hard mode adds each player's real salary from their spun season, and the squad
+has to come in compliant under the 2026 rules:
+
+- A **Designated Player** carries the maximum budget charge ($803,125) whatever
+  they actually earn. Anyone else above that has to be **bought down** to it
+  with allocation money.
+- Up to three players aged 22 or under can be carried at **U22 Initiative**
+  rates ($150,000 at 20 or younger, $200,000 at 21–22). The slots go to
+  whoever saves the most.
+- Whatever the squad is still over the cap by also comes out of allocation.
+
+The published figures cover a 20-man senior roster, so both the cap and the
+allocation pot are scaled to this game's 14-man squad — the same money per
+player a real club works with:
+
+| | League (20 players) | This game (14) |
+|---|---|---|
+| Salary cap | $6,425,000 | **$4,497,500** |
+| Allocation money | $6,000,000 | **$4,200,000** |
+
+A pick is refused if it would make the squad impossible to complete legally —
+every empty slot is costed at the senior minimum ($113,400) — so the draft can
+never be spent into a dead end.
+
+**Honest caveat:** the cap is a genuine constraint (a typical hard-mode squad
+spends $3.4M of its $4.2M allocation and carries 2 DPs rather than 3) but it
+barely moves the difficulty — roughly 70 points median against normal's 71.
+Measured across the whole range, from full allocation down to none, a perfect
+draft only falls from 70 to 68 points. Elite g+ players are often cheap
+(goalkeepers, old seasons, youngsters) and the DP tag already absorbs the three
+priciest, so there is little left for the cap to bite on.
 - **Designated Players**: anyone whose guaranteed compensation that season topped
   **$1.7M**. Max 3 DPs in the squad; a 4th is blocked. The threshold is flat
   across all seasons, so 2013 stars are cheap — a deliberate quirk.

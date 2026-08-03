@@ -1,8 +1,11 @@
 import './style.css';
 import {
-  DIFFICULTIES, FORMATIONS, MAX_DPS, SQUAD_SIZE, SLOT_LABEL, SIDE_LABEL,
+  DIFFICULTIES, FORMATIONS, SQUAD_SIZE, SLOT_LABEL, SIDE_LABEL, COACH_REROLLS,
+  SALARY_CAP, ALLOCATION_MONEY,
   makeSquad, countDPs, openSlotsFor, fitFor, effectiveScore, swapTargets,
+  budget, isVersatile,
 } from './rules.js';
+import { achievements } from './achievements.js';
 import { loadPool, makeRng, drawSpin, annotate, pick, currentRosters } from './pool.js';
 import { simSeason, squadStrength, TARGET_POINTS, SEASON_GAMES } from './sim.js';
 
@@ -139,7 +142,7 @@ function setupScreen() {
         <div class="opts" style="margin-top:8px" data-group="difficulty">
           ${Object.entries(DIFFICULTIES).map(([k, d]) => `
             <button class="opt" data-val="${k}" aria-pressed="${S.difficulty === k}">
-              <b>${d.label}</b><span>${d.rerolls} reroll${d.rerolls > 1 ? 's' : ''}</span>
+              <b>${d.label}</b><span>${d.rerolls} reroll${d.rerolls > 1 ? 's' : ''}<br>${d.note}</span>
             </button>`).join('')}
         </div>
       </div>
@@ -194,31 +197,41 @@ const shape = (f) => ({
 
 function startDraft() {
   S.rng = makeRng((Math.random() * 2 ** 32) >>> 0);
+  S.rules = DIFFICULTIES[S.difficulty];
   S.squad = makeSquad(S.formation);
   S.coach = null;
   S.picked = new Set();
-  S.rerolls = DIFFICULTIES[S.difficulty].rerolls;
+  S.rerolls = S.rules.rerolls;
+  S.coachRerolls = COACH_REROLLS;
   S.tab = 'spin';
   S.swapFrom = null;
   nextSpin();
 }
 
 function nextSpin(animate = true) {
-  const { spin } = drawSpin(S.pool, S.squad, S.picked, S.rng);
+  const { spin } = drawSpin(S.pool, S.squad, S.picked, S.rng, S.rules);
   S.spin = spin;
   draftScreen(animate);
 }
 
+const money = (n) => `$${(n / 1e6).toFixed(2)}M`;
+const moneyShort = (n) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n / 1000)}k`);
+
 function draftScreen(animate = false) {
   const filled = S.squad.filter((s) => s.player).length;
   const dps = countDPs(S.squad);
+  const maxDPs = S.rules.maxDPs;
+  const dpText = maxDPs === Infinity
+    ? `${dps}<span class="frac">/∞</span>`
+    : `${dps}<span class="frac">/${maxDPs}</span>`;
 
   render(`
     <div class="topbar">
       <div class="stat"><b>${filled}<span class="frac">/${SQUAD_SIZE}</span></b><span>Drafted</span></div>
       <div class="stat"><b style="color:${S.rerolls ? 'var(--text)' : 'var(--dim)'}">${S.rerolls}</b><span>Rerolls</span></div>
-      <div class="stat"><b style="color:${dps >= MAX_DPS ? 'var(--dp)' : 'var(--text)'}">${dps}<span class="frac">/${MAX_DPS}</span></b><span>DPs</span></div>
+      <div class="stat"><b style="color:${dps >= maxDPs ? 'var(--dp)' : 'var(--text)'}">${dpText}</b><span>DPs</span></div>
     </div>
+    ${S.rules.salaryCap ? capBar() : ''}
     <div class="opts two" style="margin-bottom:12px" data-group="tab">
       <button class="opt" data-val="spin" aria-pressed="${S.tab === 'spin'}"><b>Spin</b></button>
       <button class="opt" data-val="squad" aria-pressed="${S.tab === 'squad'}"><b>Squad</b></button>
@@ -239,8 +252,27 @@ function draftScreen(animate = false) {
   }
 }
 
+/** Hard mode's budget readout: charge against the cap, plus allocation left. */
+function capBar() {
+  const b = budget(S.squad);
+  const pctCap = Math.min(100, (b.charge / SALARY_CAP) * 100);
+  const over = b.charge > SALARY_CAP;
+  return `
+    <div class="capbar">
+      <div class="between" style="margin-bottom:6px">
+        <div><span class="eyebrow">Salary budget</span>
+          <b class="mono ${over ? 'red' : ''}" style="font-size:15px;display:block">
+            ${money(b.charge)}<span class="dim" style="font-size:11px"> / ${money(SALARY_CAP)}</span></b></div>
+        <div style="text-align:right"><span class="eyebrow">Allocation left</span>
+          <b class="mono ${b.gamLeft < 0 ? 'red' : ''}" style="font-size:15px;display:block">${money(Math.max(0, b.gamLeft))}</b></div>
+      </div>
+      <div class="pace"><i style="width:${pctCap}%;background:${over ? 'var(--gold)' : 'var(--accent)'}"></i></div>
+      ${b.u22 ? `<div class="dim" style="font-size:10.5px;margin-top:5px">${b.u22} U22 slot${b.u22 > 1 ? 's' : ''} used · buy-downs ${money(b.buydown)}</div>` : ''}
+    </div>`;
+}
+
 function spinPane(spin, animate = false) {
-  const roster = annotate(spin.roster, S.squad, S.picked);
+  const roster = annotate(spin.roster, S.squad, S.picked, S.rules);
   const order = ['GK', 'CB', 'FB', 'DM', 'CM', 'AM', 'W', 'ST'];
   const groups = order
     .map((pos) => [pos, roster.filter((p) => p.pos === pos)])
@@ -277,8 +309,9 @@ function playerRow(p) {
         <div class="sub">
           <span>${p.pos}</span>${sideTag(p)}
           <span>·</span><span>${p.minutes.toLocaleString()}′</span>
-          ${p.g90 > 0 ? `<span>· ${(p.g90 * 34).toFixed(0)}g</span>` : ''}
+          ${S.rules.salaryCap ? `<span>· ${moneyShort(p.salary)}</span>` : ''}
           ${p.dp ? '<span class="pill dp">DP</span>' : ''}
+          ${isVersatile(p) ? `<span class="pill versatile" title="${esc(p.positions.join(' / '))}">Versatile</span>` : ''}
           ${p.blocked ? `<span class="pill">${esc(p.blocked)}</span>` : ''}
         </div>
       </div>
@@ -330,22 +363,35 @@ function bindSpinPane() {
   on('.pl[data-pid]', 'click', (e) => {
     const p = S.spin.roster.find((x) => x.id === e.currentTarget.dataset.pid);
     const options = openSlotsFor(p, S.squad);
-    if (!options.length) return;
-    if (options.length === 1) commitPick(p, options[0].slot);
-    else chooseSlot(p, options);
+    if (options.length) chooseSlot(p, options);
   });
 }
 
-/** Sheet listing every slot the player can fill, with what each would cost. */
+/**
+ * Confirmation sheet for a pick. Always shown -- even when there is only one
+ * slot available -- so a mistaken tap can be backed out of before the player
+ * is locked in.
+ */
 function chooseSlot(player, options) {
+  const only = options.length === 1;
   const sheet = document.createElement('div');
   sheet.className = 'sheet';
   sheet.innerHTML = `
     <div class="sheet-inner">
-      <div class="eyebrow">Where does ${esc(player.name)} play?</div>
-      <div class="dim" style="font-size:11px;margin-top:4px">
-        ${player.pos}${player.side ? ` · ${SIDE_LABEL[player.side] === 'L' ? 'left' : 'right'} side` : ''} · ${player.score.toFixed(2)} g+
+      <button class="sheet-x" id="x" aria-label="Cancel">✕</button>
+      <div class="pickhead">
+        ${avatar(HEAD(player.id), initials(player.name), 'head round')}
+        <div style="min-width:0">
+          <div class="cname">${esc(player.name)}</div>
+          <div class="dim" style="font-size:11px">
+            ${player.pos}${player.side ? ` · ${SIDE_LABEL[player.side] === 'L' ? 'left' : 'right'}` : ''}
+            · ${player.score > 0 ? '+' : ''}${player.score.toFixed(2)} g+
+            ${S.rules.salaryCap ? ` · ${moneyShort(player.salary)}` : ''}
+          </div>
+          ${isVersatile(player) ? `<div class="dim" style="font-size:10.5px;margin-top:2px">Has played ${esc(player.positions.join(', '))}</div>` : ''}
+        </div>
       </div>
+      <div class="eyebrow" style="margin-top:12px">${only ? 'Confirm this pick' : 'Where do they play?'}</div>
       <div class="slot-opts">
         ${options.map((o) => `
           <button class="opt slotopt" data-slot="${o.slot.id}">
@@ -356,16 +402,19 @@ function chooseSlot(player, options) {
       </div>
       ${options.some((o) => o.penalty) ? `<p class="dim" style="font-size:11px;margin-top:10px">
         ${esc(options.find((o) => o.penalty).reasons.join(' + '))} costs g+.</p>` : ''}
-      <button class="btn ghost sm" id="cancel" style="width:100%;margin-top:12px">Cancel</button>
+      <button class="btn ghost sm" id="cancel" style="width:100%;margin-top:12px">Pick someone else</button>
     </div>`;
   document.body.appendChild(sheet);
+  mountAvatars(sheet);
+  const close = () => sheet.remove();
   sheet.querySelectorAll('[data-slot]').forEach((b) => b.addEventListener('click', () => {
     const opt = options.find((o) => o.slot.id === b.dataset.slot);
-    sheet.remove();
+    close();
     commitPick(player, opt.slot);
   }));
-  sheet.querySelector('#cancel').addEventListener('click', () => sheet.remove());
-  sheet.addEventListener('click', (e) => { if (e.target === sheet) sheet.remove(); });
+  sheet.querySelector('#cancel').addEventListener('click', close);
+  sheet.querySelector('#x').addEventListener('click', close);
+  sheet.addEventListener('click', (e) => { if (e.target === sheet) close(); });
 }
 
 async function commitPick(player, slot) {
@@ -386,19 +435,14 @@ async function commitPick(player, slot) {
 
 // ---------------------------------------------------------------- coach
 
-const pct = (v) => `${Math.round(v * 100)}`;
-const swing = (v) => {
-  const p = (v - 0.5) * 20; // COACH_SWING, as a percentage
-  return `${p >= 0 ? '+' : ''}${p.toFixed(1)}%`;
-};
-
 function coachCard(c, selectable) {
+  // Shown as a plain 0-100 percentile rank rather than the resulting boost.
   const bar = (label, v) => `
     <div class="crow">
       <span class="clab">${label}</span>
       <span class="cbar"><i style="width:${Math.max(3, v * 100)}%;
         background:${v >= 0.5 ? 'var(--accent)' : 'var(--red)'}"></i></span>
-      <b class="mono ${v >= 0.5 ? 'up' : 'down'}">${swing(v)}</b>
+      <b class="mono ${v >= 0.5 ? 'up' : 'down'}">${Math.round(v * 100)}</b>
     </div>`;
   return `
     <${selectable ? 'button' : 'div'} class="coach" ${selectable ? `data-coach="${c.id}"` : ''}>
@@ -419,30 +463,48 @@ function coachCard(c, selectable) {
 }
 
 function coachScreen() {
-  // Three names off the touchline; take one.
+  // Three names off the touchline; take one, or call for a different list.
   const all = [...S.sim.coaches];
   const picks = [];
   while (picks.length < 3 && all.length) {
     picks.push(all.splice(Math.floor(S.rng() * all.length), 1)[0]);
   }
   S.coachOptions = picks;
+  drawCoaches();
+}
 
+function drawCoaches() {
   render(`
     <div style="margin-bottom:12px">
-      <div class="eyebrow">Squad complete</div>
-      <h2 style="font-size:20px">Appoint a head coach</h2>
-      <p class="muted" style="font-size:13px;margin-top:6px">
-        Ratings are career percentile ranks for expected goals for and against.
-        A median coach changes nothing; the best and worst swing your attack and
-        defence by a tenth.</p>
+      <div class="between">
+        <div><div class="eyebrow">Squad complete</div>
+          <h2 style="font-size:20px">Appoint a head coach</h2></div>
+        <button class="btn ghost sm" id="creroll" ${S.coachRerolls ? '' : 'disabled'}>
+          ↻ Reroll (${S.coachRerolls})</button>
+      </div>
+      <p class="muted" style="font-size:13px;margin-top:8px">
+        Ratings are career percentile ranks in the league for expected goals for
+        (attack) and against (defence), out of 100. A median coach changes
+        nothing.</p>
     </div>
-    <div class="coaches">${picks.map((c) => coachCard(c, true)).join('')}</div>
+    <div class="coaches">${S.coachOptions.map((c) => coachCard(c, true)).join('')}</div>
     <p class="dim center" style="font-size:11.5px;margin-top:10px">
-      🏆 an MLS Cup winner adds 5% in the playoffs · 🛡 a Shield winner adds 5% in the league</p>`);
+      🏆 an MLS Cup winner adds 2.5% in the playoffs · 🛡 a Shield winner adds 2.5% in the league</p>`);
 
   on('[data-coach]', 'click', (e) => {
     S.coach = S.sim.coaches.find((c) => c.id === e.currentTarget.dataset.coach);
     reviewScreen();
+  });
+  on('#creroll', 'click', () => {
+    if (!S.coachRerolls) return;
+    S.coachRerolls--;
+    const all = S.sim.coaches.filter((c) => !S.coachOptions.includes(c));
+    const picks = [];
+    while (picks.length < 3 && all.length) {
+      picks.push(all.splice(Math.floor(S.rng() * all.length), 1)[0]);
+    }
+    S.coachOptions = picks;
+    drawCoaches();
   });
 }
 
@@ -534,6 +596,7 @@ function drawReview() {
       <div style="text-align:right"><div class="eyebrow">Projected</div>
         <b class="mono" style="font-size:17px">${(projected * SEASON_GAMES).toFixed(0)} pts</b></div>
     </div>
+    ${S.rules.salaryCap ? capBar() : ''}
     <div id="pane">${squadPane(true)}</div>
     ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}
     <button class="btn" id="play" style="margin-top:14px">Play the 2026 season →</button>
@@ -639,6 +702,24 @@ async function runTicker() {
   }
   await wait(600);
   standingsScreen();
+}
+
+/** Everything the season earned, badge-style. */
+function achievementsCard(season) {
+  const list = achievements(season, S.squad);
+  S.achievements = list;
+  if (!list.length) return '';
+  return `
+    <div class="card" style="margin-top:12px">
+      <div class="eyebrow" style="margin-bottom:9px">Achievements · ${list.length}</div>
+      <div class="achs">
+        ${list.map((a) => `
+          <div class="ach ${a.tier}">
+            <b>${esc(a.name)}</b>
+            <span>${esc(a.note)}</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
 }
 
 function awardsCard(awards, title = 'Season leaders') {
@@ -823,8 +904,7 @@ function endScreen() {
       </p>
       <p class="dim" style="margin-top:10px;font-size:12px">
         Needed ${TARGET_POINTS}+ points and MLS Cup.
-        ${r.won ? 'You broke the record and lifted the trophy.'
-    : `You were ${Math.max(0, TARGET_POINTS - r.points)} point${TARGET_POINTS - r.points === 1 ? '' : 's'} short${r.wonCup ? '.' : ' and fell in the playoffs.'}`}
+        ${shortfall(r)}
       </p>
     </div>
 
@@ -838,6 +918,7 @@ function endScreen() {
       </div>
     </div>
 
+    ${achievementsCard(r)}
     ${awardsCard(r.awards, 'Regular-season leaders')}
     ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}
     <div style="margin-top:12px">${squadPane(false)}</div>
@@ -867,6 +948,17 @@ function endScreen() {
   on('#again', 'click', setupScreen);
 }
 
+/** Which half of the target was missed, in plain words. */
+function shortfall(r) {
+  if (r.won) return 'You broke the record and lifted the trophy.';
+  const short = TARGET_POINTS - r.points;
+  if (short > 0 && !r.wonCup) {
+    return `You were ${short} point${short === 1 ? '' : 's'} short and fell in the playoffs.`;
+  }
+  if (short > 0) return `You lifted the Cup but finished ${short} point${short === 1 ? '' : 's'} short.`;
+  return 'You had the points. The Cup got away.';
+}
+
 function shareText(withLink = false) {
   const r = S.season;
   const marks = r.results.map((x) => ({ W: '🟩', D: '🟨', L: '🟥' }[x.result]));
@@ -879,6 +971,7 @@ function shareText(withLink = false) {
     `${r.points} pts · ${cup}${r.won ? ' · IMMORTAL 👑' : ''}`,
     ...rows,
     top ? `⚽ ${shortName(top.name)} ${top.goals}` : '',
+    (S.achievements || []).length ? `🏅 ${S.achievements.slice(0, 3).map((a) => a.name).join(' · ')}` : '',
     withLink ? window.location.origin + window.location.pathname : '',
   ].filter(Boolean).join('\n');
 }

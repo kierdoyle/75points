@@ -9,7 +9,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeSquad, MAX_DPS, SQUAD_SIZE, FORMATIONS, SLOTS } from '../src/rules.js';
+import {
+  makeSquad, MAX_DPS, SQUAD_SIZE, FORMATIONS, SLOTS, DIFFICULTIES, budget,
+  SALARY_CAP, ALLOCATION_MONEY,
+} from '../src/rules.js';
+import { achievements } from '../src/achievements.js';
 import { loadPool, makeRng, drawSpin, currentRosters } from '../src/pool.js';
 import { openSlotsFor, blockReason } from '../src/rules.js';
 import {
@@ -36,18 +40,18 @@ const FORMATION_NAMES = Object.keys(FORMATIONS);
  *   strategy 'greedy' -- always take the highest-scoring legal player
  *   strategy 'good'   -- take the best of a random 3 (a decent human)
  */
-function draft(strategy, rng, rerolls = 3) {
+function draft(strategy, rng, rules = DIFFICULTIES.normal) {
   const formation = FORMATION_NAMES[Math.floor(rng() * FORMATION_NAMES.length)];
   const squad = makeSquad(formation);
   const picked = new Set();
   let dead = 0;
 
   for (let n = 0; n < SQUAD_SIZE; n++) {
-    const { spin, skipped } = drawSpin(pool, squad, picked, rng);
+    const { spin, skipped } = drawSpin(pool, squad, picked, rng, rules);
     dead += skipped.length;
-    if (!spin) throw new Error(`draft soft-locked after ${n} picks`);
+    if (!spin) throw new Error(`draft soft-locked after ${n} picks (${rules.label})`);
 
-    const legal = spin.roster.filter((p) => blockReason(p, squad, picked) === null);
+    const legal = spin.roster.filter((p) => blockReason(p, squad, picked, rules) === null);
     if (!legal.length) throw new Error('drawSpin returned a spin with no legal pick');
 
     let choice;
@@ -67,9 +71,12 @@ function draft(strategy, rng, rerolls = 3) {
     picked.add(choice.id);
   }
   const dps = squad.filter((s) => s.player.dp).length;
-  if (dps > MAX_DPS) throw new Error(`DP cap breached: ${dps}`);
+  if (dps > rules.maxDPs) throw new Error(`DP cap breached: ${dps} > ${rules.maxDPs}`);
   if (squad.some((s) => !s.player)) throw new Error('squad not filled');
-  return { squad, formation, dead };
+  if (rules.salaryCap && !budget(squad).compliant) {
+    throw new Error(`hard-mode squad is not cap compliant`);
+  }
+  return { squad, formation, dead, dps };
 }
 
 // ------------------------------------------------------- K_STRENGTH tuning
@@ -127,14 +134,15 @@ function checkCalibration(k) {
     + '(match randomness alone should be close to this)');
 }
 
-function runBatch(strategy, runs, seed0) {
+function runBatch(strategy, runs, seed0, rules = DIFFICULTIES.normal) {
   const out = {
     pts: [], strength: [], cup: 0, playoffs: 0, wins: 0, dead: 0, dps: [],
-    topScorer: [], topAssist: [], scorerShare: [],
+    topScorer: [], topAssist: [], scorerShare: [], achs: [], gam: [],
   };
   for (let i = 0; i < runs; i++) {
     const rng = makeRng(seed0 + i);
-    const { squad, dead } = draft(strategy, rng);
+    const { squad, dead } = draft(strategy, rng, rules);
+    if (rules.salaryCap) out.gam.push(budget(squad).gamUsed);
     // Players are offered three coaches; the greedy bot takes the best of them,
     // the others take one at random.
     const shortlist = [0, 1, 2].map(() => sim.coaches[Math.floor(rng() * sim.coaches.length)]);
@@ -157,6 +165,7 @@ function runBatch(strategy, runs, seed0) {
       out.scorerShare.push(scorer.goals / res.userRecord.gf);
     }
     if (assister) out.topAssist.push(assister.assists);
+    out.achs.push(achievements(res, squad).length);
     out.pts.push(res.points);
     out.strength.push(squadStrength(squad).spg);
     out.dead += dead;
@@ -215,7 +224,7 @@ function main() {
   checkCalibration(K_STRENGTH);
 
   const runs = 500;
-  console.log(`\n== ${runs} drafts per strategy ==`);
+  console.log(`\n== ${runs} drafts per strategy (normal rules) ==`);
   const results = {};
   for (const [label, strat, seed] of [
     ['random', 'random', 1000], ['decent', 'good', 5000], ['optimal', 'greedy', 9000],
@@ -223,6 +232,19 @@ function main() {
     results[label] = runBatch(strat, runs, seed);
     report(label, results[label], runs);
   }
+
+  console.log('\n== difficulty modes (greedy drafter) ==');
+  const modes = {};
+  for (const [key, seed] of [['easy', 21000], ['normal', 22000], ['hard', 23000]]) {
+    modes[key] = runBatch('greedy', runs, seed, DIFFICULTIES[key]);
+    report(key, modes[key], runs);
+  }
+  const H = modes.hard;
+  console.log(`  hard mode: cap ${SALARY_CAP.toLocaleString()}, allocation used median `
+    + `${quant(H.gam, 0.5).toLocaleString()} / ${ALLOCATION_MONEY.toLocaleString()} `
+    + `(max ${Math.max(...H.gam).toLocaleString()})`);
+  console.log(`  DPs carried -- easy median ${quant(modes.easy.dps, 0.5)}, `
+    + `hard median ${quant(H.dps, 0.5)}`);
 
   console.log('\n== checks ==');
   const R = results.random; const G = results.optimal; const D = results.decent;
@@ -252,6 +274,18 @@ function main() {
     `${(share * 100).toFixed(0)}% of team goals`]);
   ok.push(['top assister is believable', quant(G.topAssist, 0.5) >= 6 && quant(G.topAssist, 0.5) <= 20,
     `median ${quant(G.topAssist, 0.5)}`]);
+
+  // Difficulty modes must actually differ, and hard must stay completable.
+  ok.push(['hard mode is harder than normal', quant(H.pts, 0.5) < quant(modes.normal.pts, 0.5),
+    `hard ${quant(H.pts, 0.5)} vs normal ${quant(modes.normal.pts, 0.5)} pts`]);
+  ok.push(['easy mode is the easiest', quant(modes.easy.pts, 0.5) >= quant(modes.normal.pts, 0.5),
+    `easy ${quant(modes.easy.pts, 0.5)} pts`]);
+  ok.push(['every hard-mode squad is cap compliant', H.gam.every((g) => g <= ALLOCATION_MONEY),
+    `max ${Math.max(...H.gam).toLocaleString()} / ${ALLOCATION_MONEY.toLocaleString()}`]);
+  ok.push(['easy mode really is unlimited DPs', Math.max(...modes.easy.dps) > MAX_DPS,
+    `max ${Math.max(...modes.easy.dps)} DPs`]);
+  ok.push(['achievements fire but stay selective',
+    quant(G.achs, 0.5) >= 1 && quant(G.achs, 0.5) <= 8, `median ${quant(G.achs, 0.5)}`]);
 
   let failed = 0;
   for (const [name, pass, val] of ok) {

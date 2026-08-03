@@ -120,11 +120,11 @@ function poisson(lambda, rng) {
 
 // ---------------------------------------------------------------- coaches
 
-// A coach's percentile ranks swing the team by up to a tenth either way; a
+// A coach's percentile ranks swing the team by up to 2.5% either way; a
 // median (50th percentile) coach changes nothing, which keeps the league
 // calibration intact since a randomly drawn coach averages out to neutral.
-export const COACH_SWING = 0.20;      // 1 + 0.20 * (pct - 0.5)  =>  0.9 .. 1.1
-export const TROPHY_BONUS = 0.05;     // Shield in the league, Cup in the playoffs
+export const COACH_SWING = 0.05;      // 1 + 0.05 * (pct - 0.5)  =>  0.975 .. 1.025
+export const TROPHY_BONUS = 0.025;    // Shield in the league, Cup in the playoffs
 
 const NEUTRAL = { atk: 1, def: 1 };
 
