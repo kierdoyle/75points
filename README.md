@@ -29,9 +29,29 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
 
 ### Draft rules
 
-- **Position eligibility** uses ASA's `general_position` codes: GK←GK, CB←CB,
-  FB←FB, DM←DM/CM, CM←CM/DM/AM, AM←AM/CM, W←W/AM, ST←ST/W. Sub slots take
-  D←CB/FB, M←DM/CM/AM, A←W/ST.
+**Positions are locked.** A centre back only plays centre back, a winger only
+plays wing, a striker only plays striker. Two kinds of move are allowed, and
+both cost g+:
+
+| Move | Penalty |
+|---|---|
+| Fullback or winger switching flanks (LB↔RB, LW↔RW) | **−20%** |
+| A midfielder moving one step along the band | **−10%** |
+
+Midfielders may only move **one step**: DM↔CM, CM↔AM, and an attacking
+midfielder can push out to the wing. So a CM can cover DM or AM, but a DM can
+never play AM. Bench slots cover a whole band and cost nothing.
+
+Which flank a player belongs on is taken from **where they actually played** —
+the mean y coordinate of their touches in the event feed (see
+`scripts/build_events.py`). Players who genuinely covered both flanks are
+recorded as two-sided and move freely. 2020 has no event feed, so those
+player-seasons are treated as two-sided.
+
+Sub slots take D←CB/FB, M←DM/CM/AM, A←W/ST.
+
+You can **swap any two drafted players** whose positions are mutually legal,
+both during the draft (Squad tab) and on the review screen before kick-off.
 - **Designated Players**: anyone whose guaranteed compensation that season topped
   **$1.7M**. Max 3 DPs in the squad; a 4th is blocked. The threshold is flat
   across all seasons, so 2013 stars are cheap — a deliberate quirk.
@@ -66,7 +86,13 @@ the strength-to-goals coefficient is tuned so season points from match simulatio
 reproduce that fitted line, and match randomness alone then generates close to
 the observed real-world spread.
 
-Your squad's strength is the sum of the starting XI's scores plus 30% of the subs'.
+Your squad's strength is the sum of the starting XI's scores plus 30% of the
+subs', **after** position penalties.
+
+Goals are attributed to players from a positional prior weighted by their real
+goals and assists per 90, so a prolific forward scores like one. It is tuned so
+the top scorer takes roughly a quarter to a third of the team's goals — about
+what real Golden Boot winners manage — and `npm run sanity` asserts it.
 
 Playoffs follow the real format: top 8 per conference, best-of-3 Round One with
 drawn games going straight to penalties, then single-elimination Conference
@@ -88,9 +114,14 @@ deploy previews and build statuses reported back on the PR.
 Rebuilding the data (needs the ASA client — `pip install itscalledsoccer pandas`):
 
 ```bash
-python scripts/fetch_raw.py    # caches the ASA API responses to scripts/.cache/
-python scripts/build_data.py   # writes public/data/{pool,sim}.json
+python scripts/fetch_raw.py     # caches the ASA API responses to scripts/.cache/
+python scripts/build_events.py  # summarises the MLS event CSVs (sides, goals, assists)
+python scripts/build_data.py    # writes public/data/{pool,sim}.json
 ```
+
+`build_events.py` reads the season event CSVs (`{year}MLS_events.csv`), which
+live outside this repo because they are ~400 MB each; pass their directory as
+an argument if it isn't the default.
 
 The deployed game makes **zero** API calls — everything is baked into two JSON
 files (~330 KB total). Club badges and player headshots are hotlinked from ASA's

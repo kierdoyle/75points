@@ -36,6 +36,15 @@ CALIB_SEASONS = [s for s in SEASONS if s not in ("2020", CURRENT_SEASON)]
 POSITIONS = ["GK", "CB", "FB", "DM", "CM", "AM", "W", "ST"]
 POS_IDX = {p: i for i, p in enumerate(POSITIONS)}
 
+# Sides come from the mean y of a player's touches in the event feed (see
+# scripts/build_events.py). High y is the left, low y the right. Anything
+# inside the deadband played both flanks often enough that we let them switch
+# freely -- the game only penalises a player who clearly has a side.
+SIDE_NONE, SIDE_LEFT, SIDE_RIGHT = 0, 1, 2
+SIDE_DEADBAND = 5.0
+SIDE_MIN_TOUCHES = 150
+SIDED_POSITIONS = {"FB", "W"}
+
 # ASA's teams endpoint has no conference column, so the 2026 alignment is
 # hardcoded. 15 clubs a side; the player's expansion club makes 16 in whichever
 # conference they choose.
@@ -51,6 +60,29 @@ OUT = os.path.join(os.path.dirname(__file__), "..", "public", "data")
 def load(name):
     with open(os.path.join(CACHE, name + ".pkl"), "rb") as f:
         return pickle.load(f)
+
+
+def load_events():
+    """{season: {player_name: [mean_y, touches, goals, assists]}}."""
+    path = os.path.join(CACHE, "events_summary.json")
+    if not os.path.exists(path):
+        raise SystemExit("missing events_summary.json -- run scripts/build_events.py first")
+    with open(path) as f:
+        return json.load(f)
+
+
+def side_of(position, entry):
+    """Which flank a player belongs on, or SIDE_NONE if they covered both."""
+    if position not in SIDED_POSITIONS or not entry:
+        return SIDE_NONE
+    mean_y, touches = entry[0], entry[1]
+    if touches < SIDE_MIN_TOUCHES:
+        return SIDE_NONE
+    if mean_y >= 50 + SIDE_DEADBAND:
+        return SIDE_LEFT
+    if mean_y <= 50 - SIDE_DEADBAND:
+        return SIDE_RIGHT
+    return SIDE_NONE
 
 
 def sum_above_avg(data):
@@ -125,6 +157,7 @@ def salary_lookup(season):
 def main():
     players = load("players")
     teams = load("teams")
+    events = load_events()
 
     name_by_id = dict(zip(players["player_id"], players["player_name"]))
     team_rows = {
@@ -150,14 +183,25 @@ def main():
         sal_team, sal_player = salary_lookup(season)
         gp = gp_by_season.get(season, {})
 
+        ev_season = events.get(season, {})
+
         def emit(recs, pid, team_id, pos, mins, score):
             # Mid-season transfers come back as one combined row with a list of
             # team_ids. Split minutes and score evenly so club totals stay
             # honest and the spin roster shows the share earned at that club.
+            entry = ev_season.get(name_by_id.get(pid, ""))
+            side = side_of(pos, entry)
+            # Scoring rates come off the player's whole season, so they stay
+            # correct whether or not the row gets split across clubs.
+            per90 = 90.0 / mins if mins > 0 else 0.0
+            goals90 = (entry[2] * per90) if entry else 0.0
+            assists90 = (entry[3] * per90) if entry else 0.0
+
             tids = team_id if isinstance(team_id, list) else [team_id]
             n = len(tids)
             for tid in tids:
-                recs.append((pid, tid, pos, mins / n, score / n))
+                recs.append((pid, tid, pos, mins / n, score / n,
+                             side, goals90, assists90))
 
         recs = []
         for _, r in pg.iterrows():
@@ -173,7 +217,7 @@ def main():
         # 2026 is a partial season: pro-rate each player's total to a full 34
         # games of their club's schedule so partial spins aren't systematically
         # weak against full-season ones.
-        for pid, tid, pos, mins, score in recs:
+        for pid, tid, pos, mins, score, side, g90, a90 in recs:
             scale = 1.0
             if season == CURRENT_SEASON:
                 played = gp.get(tid, 0)
@@ -188,7 +232,8 @@ def main():
             gc = sal_team.get((pid, tid), sal_player.get(pid))
             is_dp = 1 if (gc is not None and gc > DP_THRESHOLD) else 0
             pool.setdefault(season, {}).setdefault(tid, []).append(
-                [pid, POS_IDX[pos], round(adj, 2), int(round(mins * scale)), is_dp]
+                [pid, POS_IDX[pos], round(adj, 2), int(round(mins * scale)),
+                 is_dp, side, round(g90, 3), round(a90, 3)]
             )
 
     # ---- calibration -------------------------------------------------------
@@ -264,6 +309,26 @@ def main():
                 continue
             spins.append({"t": tid, "s": season, "r": roster})
             used_players.update(p[0] for p in roster)
+
+    # ---- side / scoring diagnostics ---------------------------------------
+    side_counts = {"FB": [0, 0, 0], "W": [0, 0, 0]}
+    scorers = []
+    for s in spins:
+        for row in s["r"]:
+            pos = POSITIONS[row[1]]
+            if pos in side_counts:
+                side_counts[pos][row[5]] += 1
+            if row[6] > 0:
+                scorers.append((row[6], name_by_id.get(row[0], "?"), s["s"], row[3]))
+    print("\nsides (none/left/right):")
+    for pos, c in side_counts.items():
+        tot = sum(c)
+        print(f"  {pos}: both={c[0]} ({c[0] / tot * 100:.0f}%)  "
+              f"left={c[1]}  right={c[2]}")
+    scorers.sort(reverse=True)
+    print("  best goal rates (per 90, min 1500'):")
+    for g90, nm, yr, mins in [s for s in scorers if s[3] >= 1500][:4]:
+        print(f"    {nm[:24]:<24} {yr}  {g90:.2f}/90")
 
     pool_json = {
         "positions": POSITIONS,

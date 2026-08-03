@@ -33,12 +33,24 @@ export function loadPool(raw) {
       score: p[2],
       minutes: p[3],
       dp: p[4] === 1,
+      side: p[5],   // 0 both/unknown, 1 left, 2 right
+      g90: p[6],
+      a90: p[7],
       teamId: s.t,
       season: s.s,
       projected: s.s === currentSeason,
     })).sort((a, b) => b.score - a.score),
   }));
   return { spins, teams, currentSeason };
+}
+
+/** Current-season squads keyed by club, used to name opposition scorers. */
+export function currentRosters(pool) {
+  const by = {};
+  for (const s of pool.spins) {
+    if (s.season === pool.currentSeason) by[s.teamId] = s.roster;
+  }
+  return by;
 }
 
 /**

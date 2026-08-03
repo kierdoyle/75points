@@ -1,15 +1,15 @@
 import './style.css';
 import {
-  DIFFICULTIES, FORMATIONS, MAX_DPS, SQUAD_SIZE, SLOT_LABEL,
-  makeSquad, countDPs, openSlotsFor,
+  DIFFICULTIES, FORMATIONS, MAX_DPS, SQUAD_SIZE, SLOT_LABEL, SIDE_LABEL,
+  makeSquad, countDPs, openSlotsFor, fitFor, effectiveScore, swapTargets,
 } from './rules.js';
-import { loadPool, makeRng, drawSpin, annotate, pick } from './pool.js';
+import { loadPool, makeRng, drawSpin, annotate, pick, currentRosters } from './pool.js';
 import { simSeason, squadStrength, TARGET_POINTS, SEASON_GAMES } from './sim.js';
 
 const app = document.getElementById('app');
 
 // ASA's public image buckets. Never bundled -- hotlinked, with a monogram
-// fallback for the occasional 404 (see avatar()/mountAvatars()).
+// fallback for the occasional 404 (see avatar()/setAvatar()).
 const BADGE = (id) => `https://american-soccer-analysis-headshots.s3.amazonaws.com/club_logos/${id}.png`;
 const HEAD = (id) => `https://american-soccer-analysis-headshots.s3.us-east-1.amazonaws.com/player_headshots/${id}.png`;
 
@@ -32,22 +32,21 @@ function shortName(name) {
 }
 
 /**
- * An avatar renders its monogram immediately and swaps in the remote image
- * only once it has actually loaded, so a missing badge or headshot degrades to
- * initials instead of a broken-image icon.
+ * Shrink the pitch label for long surnames. A name only wraps between words,
+ * so a single long word ("Hollingshead") has to get smaller rather than break.
  */
-function avatar(url, fallback, cls = '') {
-  let hue = 0;
-  for (const ch of fallback) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
-  // No url (the player's own club has no badge) => monogram only.
-  const src = url ? ` data-img="${esc(url)}"` : '';
-  return `<div class="avatar ${cls}"${src} style="background:hsl(${hue} 32% 26%)">${esc(fallback)}</div>`;
+function nameSize(label) {
+  const longest = Math.max(...label.split(/\s+/).map((w) => w.length));
+  if (longest >= 12) return 'xlong';
+  if (longest >= 10) return 'long';
+  return '';
 }
 
 /**
  * Point an avatar at a new image. The monogram shows immediately and is only
- * replaced once the image loads; a sequence number means that when the reel
- * flicks through badges, a slow earlier load can't overwrite a later frame.
+ * replaced once the image loads, so a missing badge or headshot degrades to
+ * initials rather than a broken-image icon. The sequence number stops a slow
+ * earlier load from overwriting a later reel frame.
  */
 function setAvatar(node, url, fallback) {
   const seq = String(Number(node.dataset.seq || 0) + 1);
@@ -68,6 +67,13 @@ function setAvatar(node, url, fallback) {
   img.src = url;
 }
 
+function avatar(url, fallback, cls = '') {
+  let hue = 0;
+  for (const ch of fallback) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
+  const src = url ? ` data-img="${esc(url)}"` : '';
+  return `<div class="avatar ${cls}"${src} style="background:hsl(${hue} 32% 26%)">${esc(fallback)}</div>`;
+}
+
 function mountAvatars(root = app) {
   root.querySelectorAll('.avatar[data-img]').forEach((node) => {
     const url = node.dataset.img;
@@ -76,10 +82,10 @@ function mountAvatars(root = app) {
   });
 }
 
-function render(html) {
+function render(html, keepScroll = false) {
   app.innerHTML = html;
   mountAvatars();
-  window.scrollTo({ top: 0 });
+  if (!keepScroll) window.scrollTo({ top: 0 });
 }
 
 function toast(msg) {
@@ -96,25 +102,24 @@ const on = (sel, ev, fn) => app.querySelectorAll(sel).forEach((n) => n.addEventL
 // ---------------------------------------------------------------- state
 
 const S = {
-  pool: null, sim: null,
+  pool: null, sim: null, rosters: null,
   difficulty: 'normal', formation: '4-3-3', conference: 'East', teamName: '',
   squad: null, picked: null, rerolls: 0, spin: null, tab: 'spin',
-  rng: null, seed: 0, season: null,
+  rng: null, season: null, swapFrom: null, speed: 1, skip: false,
 };
 
 async function boot() {
-  render(`<div class="hero"><div class="badge-75">75</div><p class="muted">Loading 14 seasons of MLS…</p></div>`);
+  render('<div class="hero"><div class="badge-75">75</div><p class="muted">Loading 14 seasons of MLS…</p></div>');
   const [pool, sim] = await Promise.all([
     fetch('./data/pool.json').then((r) => r.json()),
     fetch('./data/sim.json').then((r) => r.json()),
   ]);
   S.pool = loadPool(pool);
   S.sim = sim;
+  S.rosters = currentRosters(S.pool);
   // Only ~31 clubs appear across all 14 seasons, so warming every badge is
   // cheap and keeps the spin reel showing real crests instead of monograms.
-  for (const id of new Set(S.pool.spins.map((s) => s.teamId))) {
-    new Image().src = BADGE(id);
-  }
+  for (const id of new Set(S.pool.spins.map((s) => s.teamId))) new Image().src = BADGE(id);
   setupScreen();
 }
 
@@ -138,7 +143,6 @@ function setupScreen() {
             </button>`).join('')}
         </div>
       </div>
-
       <div class="card">
         <div class="eyebrow">Formation</div>
         <div class="opts" style="margin-top:8px" data-group="formation">
@@ -148,7 +152,6 @@ function setupScreen() {
             </button>`).join('')}
         </div>
       </div>
-
       <div class="card">
         <div class="eyebrow">Conference</div>
         <div class="opts two" style="margin-top:8px" data-group="conference">
@@ -158,15 +161,14 @@ function setupScreen() {
             </button>`).join('')}
         </div>
       </div>
-
       <div class="card">
         <div class="eyebrow">Club name</div>
         <input type="text" id="tname" maxlength="22" placeholder="Your Club FC" value="${esc(S.teamName)}" />
       </div>
-
       <button class="btn" id="start">Start drafting →</button>
       <p class="dim center" style="font-size:12px">
-        Every player is rated by their real g+ above average that season (American Soccer Analysis).
+        Players are rated by their real g+ above average that season, and locked to the
+        flank they actually played. Playing them elsewhere costs you.
       </p>
     </div>`);
 
@@ -191,12 +193,12 @@ const shape = (f) => ({
 // ---------------------------------------------------------------- draft
 
 function startDraft() {
-  S.seed = (Math.random() * 2 ** 32) >>> 0;
-  S.rng = makeRng(S.seed);
+  S.rng = makeRng((Math.random() * 2 ** 32) >>> 0);
   S.squad = makeSquad(S.formation);
   S.picked = new Set();
   S.rerolls = DIFFICULTIES[S.difficulty].rerolls;
   S.tab = 'spin';
+  S.swapFrom = null;
   nextSpin();
 }
 
@@ -209,34 +211,34 @@ function nextSpin(animate = true) {
 function draftScreen(animate = false) {
   const filled = S.squad.filter((s) => s.player).length;
   const dps = countDPs(S.squad);
-  const spin = S.spin;
 
   render(`
     <div class="topbar">
-      <div class="stat"><b>${filled}<span style="font-size:12px;color:var(--dim)">/${SQUAD_SIZE}</span></b><span>Drafted</span></div>
+      <div class="stat"><b>${filled}<span class="frac">/${SQUAD_SIZE}</span></b><span>Drafted</span></div>
       <div class="stat"><b style="color:${S.rerolls ? 'var(--text)' : 'var(--dim)'}">${S.rerolls}</b><span>Rerolls</span></div>
-      <div class="stat"><b style="color:${dps >= MAX_DPS ? 'var(--dp)' : 'var(--text)'}">${dps}<span style="font-size:12px;color:var(--dim)">/${MAX_DPS}</span></b><span>DPs</span></div>
+      <div class="stat"><b style="color:${dps >= MAX_DPS ? 'var(--dp)' : 'var(--text)'}">${dps}<span class="frac">/${MAX_DPS}</span></b><span>DPs</span></div>
     </div>
-
     <div class="opts two" style="margin-bottom:12px" data-group="tab">
       <button class="opt" data-val="spin" aria-pressed="${S.tab === 'spin'}"><b>Spin</b></button>
       <button class="opt" data-val="squad" aria-pressed="${S.tab === 'squad'}"><b>Squad</b></button>
     </div>
-
-    <div id="pane">${S.tab === 'spin' ? spinPane(spin) : squadPane()}</div>`);
+    <div id="pane">${S.tab === 'spin' ? spinPane(S.spin, animate) : squadPane(true)}</div>`);
 
   on('[data-group="tab"] .opt', 'click', (e) => {
     S.tab = e.currentTarget.dataset.val;
+    S.swapFrom = null;
     draftScreen(false);
   });
 
   if (S.tab === 'spin') {
-    if (animate) runReel(spin);
+    if (animate) runReel(S.spin);
     bindSpinPane();
+  } else {
+    bindSwap(() => draftScreen(false));
   }
 }
 
-function spinPane(spin) {
+function spinPane(spin, animate = false) {
   const roster = annotate(spin.roster, S.squad, S.picked);
   const order = ['GK', 'CB', 'FB', 'DM', 'CM', 'AM', 'W', 'ST'];
   const groups = order
@@ -251,20 +253,18 @@ function spinPane(spin) {
         <div class="season" id="reel-season">${spin.season}${spin.projected ? ' (projected)' : ''}</div>
       </div>
     </div>
-
     <div class="between" style="margin:14px 0 6px">
       <div class="eyebrow">Pick one player</div>
-      <button class="btn ghost sm" id="reroll" ${S.rerolls ? '' : 'disabled'}>
-        ↻ Reroll (${S.rerolls})
-      </button>
+      <button class="btn ghost sm" id="reroll" ${!S.rerolls || animate ? 'disabled' : ''}>↻ Reroll (${S.rerolls})</button>
     </div>
-
-    <div class="roster">
+    <div class="roster${animate ? ' pending' : ''}">
       ${groups.map(([pos, list]) => `
         <div class="group-label">${pos}</div>
         ${list.map((p) => playerRow(p)).join('')}`).join('')}
     </div>`;
 }
+
+const sideTag = (p) => (p.side ? `<span class="pill side">${SIDE_LABEL[p.side]}</span>` : '');
 
 function playerRow(p) {
   const cls = p.blocked ? 'blocked' : (p.score >= 0 ? 'pos-score' : 'neg-score');
@@ -274,9 +274,9 @@ function playerRow(p) {
       <div class="who">
         <div class="nm">${esc(p.name)}</div>
         <div class="sub">
-          <span>${p.pos}</span>
-          <span>·</span>
-          <span>${p.minutes.toLocaleString()}′</span>
+          <span>${p.pos}</span>${sideTag(p)}
+          <span>·</span><span>${p.minutes.toLocaleString()}′</span>
+          ${p.g90 > 0 ? `<span>· ${(p.g90 * 34).toFixed(0)}g</span>` : ''}
           ${p.dp ? '<span class="pill dp">DP</span>' : ''}
           ${p.blocked ? `<span class="pill">${esc(p.blocked)}</span>` : ''}
         </div>
@@ -292,16 +292,19 @@ async function runReel(spin) {
   const season = document.getElementById('reel-season');
   if (!reel) return;
   const box = reel.querySelector('.avatar');
-  // Keep the roster and reroll out of the way until the reel settles --
-  // otherwise the player list gives away the answer mid-spin.
+  // The roster ships already hidden (spinPane adds .pending when animating),
+  // so it can never paint the answer for a frame before the reel starts.
   const roster = app.querySelector('.roster');
   const reroll = document.getElementById('reroll');
-  roster?.classList.add('pending');
-  if (reroll) reroll.disabled = true;
   reel.classList.add('spinning');
 
+  // Tapping the reel cuts the animation short for anyone who doesn't want to
+  // sit through it.
+  S.reelSkip = false;
+  reel.addEventListener('click', () => { S.reelSkip = true; }, { once: true });
+
   let delay = 50;
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 14 && !S.reelSkip; i++) {
     const r = pick(S.pool.spins, Math.random);
     setAvatar(box, BADGE(r.teamId), r.team.abbr);
     team.textContent = r.team.name;
@@ -325,32 +328,40 @@ function bindSpinPane() {
   });
   on('.pl[data-pid]', 'click', (e) => {
     const p = S.spin.roster.find((x) => x.id === e.currentTarget.dataset.pid);
-    const slots = openSlotsFor(p, S.squad);
-    if (!slots.length) return;
-    if (slots.length === 1) commitPick(p, slots[0]);
-    else chooseSlot(p, slots);
+    const options = openSlotsFor(p, S.squad);
+    if (!options.length) return;
+    if (options.length === 1) commitPick(p, options[0].slot);
+    else chooseSlot(p, options);
   });
 }
 
-function chooseSlot(player, slots) {
+/** Sheet listing every slot the player can fill, with what each would cost. */
+function chooseSlot(player, options) {
   const sheet = document.createElement('div');
   sheet.className = 'sheet';
   sheet.innerHTML = `
     <div class="sheet-inner">
       <div class="eyebrow">Where does ${esc(player.name)} play?</div>
+      <div class="dim" style="font-size:11px;margin-top:4px">
+        ${player.pos}${player.side ? ` · ${SIDE_LABEL[player.side] === 'L' ? 'left' : 'right'} side` : ''} · ${player.score.toFixed(2)} g+
+      </div>
       <div class="slot-opts">
-        ${slots.map((s) => `
-          <button class="opt" data-slot="${s.id}">
-            <b>${SLOT_LABEL[s.pos]}</b><span>${s.starter ? 'Starter' : 'Bench'}</span>
+        ${options.map((o) => `
+          <button class="opt slotopt" data-slot="${o.slot.id}">
+            <b>${SLOT_LABEL[o.slot.pos]}</b>
+            <span>${o.penalty ? `−${(o.penalty * 100).toFixed(0)}%` : (o.slot.starter ? 'Natural' : 'Bench')}</span>
+            <i>${effectiveScore(player, o.slot.pos) > 0 ? '+' : ''}${effectiveScore(player, o.slot.pos).toFixed(2)}</i>
           </button>`).join('')}
       </div>
+      ${options.some((o) => o.penalty) ? `<p class="dim" style="font-size:11px;margin-top:10px">
+        ${esc(options.find((o) => o.penalty).reasons.join(' + '))} costs g+.</p>` : ''}
       <button class="btn ghost sm" id="cancel" style="width:100%;margin-top:12px">Cancel</button>
     </div>`;
   document.body.appendChild(sheet);
   sheet.querySelectorAll('[data-slot]').forEach((b) => b.addEventListener('click', () => {
-    const slot = slots.find((s) => s.id === b.dataset.slot);
+    const opt = options.find((o) => o.slot.id === b.dataset.slot);
     sheet.remove();
-    commitPick(player, slot);
+    commitPick(player, opt.slot);
   }));
   sheet.querySelector('#cancel').addEventListener('click', () => sheet.remove());
   sheet.addEventListener('click', (e) => { if (e.target === sheet) sheet.remove(); });
@@ -367,40 +378,105 @@ async function commitPick(player, slot) {
   await wait(950);
   slot.justFilled = false;
 
-  if (S.squad.every((s) => s.player)) { seasonScreen(); return; }
+  if (S.squad.every((s) => s.player)) { reviewScreen(); return; }
   S.tab = 'spin';
   nextSpin();
 }
 
-function squadPane() {
+// ---------------------------------------------------------------- squad
+
+function squadPane(interactive = false) {
   const starters = S.squad.filter((s) => s.starter);
   const subs = S.squad.filter((s) => !s.starter);
   const { total } = squadStrength(S.squad);
   const filled = S.squad.filter((s) => s.player).length;
+  const from = S.swapFrom ? S.squad.find((s) => s.id === S.swapFrom) : null;
+  const targets = from ? new Set(swapTargets(from, S.squad).map((s) => s.id)) : new Set();
 
   return `
-    <div class="pitch">
-      ${starters.map((s) => pitchSlot(s)).join('')}
-    </div>
-    <div class="bench">${subs.map((s) => pitchSlot(s, true)).join('')}</div>
-    <div class="between card" style="margin-top:12px">
-      <div><div class="eyebrow">Squad g+</div><b class="mono" style="font-size:19px">${total > 0 ? '+' : ''}${total.toFixed(1)}</b></div>
-      <div class="dim" style="font-size:12px;text-align:right">${S.formation} · ${filled}/${SQUAD_SIZE} filled<br>Subs count ${'30%'} toward strength</div>
+    <div class="pitch">${starters.map((s) => pitchSlot(s, false, interactive, from, targets)).join('')}</div>
+    <div class="bench">${subs.map((s) => pitchSlot(s, true, interactive, from, targets)).join('')}</div>
+    ${interactive ? `<p class="dim center swap-hint" style="font-size:11.5px;margin-top:10px">
+      ${from ? 'Tap a highlighted player to swap — tap again to cancel'
+    : 'Tap two players to swap their positions'}</p>` : ''}
+    <div class="between card" style="margin-top:10px">
+      <div><div class="eyebrow">Squad g+</div>
+        <b class="mono" style="font-size:19px">${total > 0 ? '+' : ''}${total.toFixed(1)}</b></div>
+      <div class="dim" style="font-size:12px;text-align:right">${S.formation} · ${filled}/${SQUAD_SIZE} filled<br>
+        After position penalties · subs at 30%</div>
     </div>`;
 }
 
-function pitchSlot(s, bench = false) {
+function pitchSlot(s, bench, interactive, from, targets) {
   const style = bench ? '' : `style="left:${s.x}%;bottom:${s.y}%"`;
   if (!s.player) {
     return `<div class="slot empty" ${style}>
       <div class="avatar round"></div><div class="lbl">${SLOT_LABEL[s.pos]}</div></div>`;
   }
   const p = s.player;
-  return `<div class="slot ${s.justFilled ? 'filling' : ''}" ${style}>
+  const fit = fitFor(p, s.pos);
+  const pen = fit && fit.penalty ? `<span class="pen">−${(fit.penalty * 100).toFixed(0)}%</span>` : '';
+  const cls = [
+    'slot',
+    s.justFilled ? 'filling' : '',
+    interactive ? 'tappable' : '',
+    from && from.id === s.id ? 'picked' : '',
+    from && targets.has(s.id) ? 'target' : '',
+    from && from.id !== s.id && !targets.has(s.id) ? 'faded' : '',
+  ].filter(Boolean).join(' ');
+  return `<div class="${cls}" ${style} data-slot="${s.id}">
     ${avatar(HEAD(p.id), initials(p.name), 'head round')}
-    <div class="lbl">${SLOT_LABEL[s.pos]}</div>
-    <div class="nm2">${esc(shortName(p.name))}</div>
+    <div class="lbl">${SLOT_LABEL[s.pos]}${pen}</div>
+    <div class="nm2 ${nameSize(shortName(p.name))}">${esc(shortName(p.name))}</div>
   </div>`;
+}
+
+/** Tap one player then another to swap them, when both can play the other's slot. */
+function bindSwap(rerender) {
+  on('.slot.tappable[data-slot]', 'click', (e) => {
+    const id = e.currentTarget.dataset.slot;
+    if (!S.swapFrom) { S.swapFrom = id; rerender(); return; }
+    if (S.swapFrom === id) { S.swapFrom = null; rerender(); return; }
+    const a = S.squad.find((s) => s.id === S.swapFrom);
+    const b = S.squad.find((s) => s.id === id);
+    if (!swapTargets(a, S.squad).some((s) => s.id === id)) {
+      // Not a legal pair -- treat the tap as picking a new starting player.
+      S.swapFrom = id;
+      rerender();
+      return;
+    }
+    const before = squadStrength(S.squad).total;
+    [a.player, b.player] = [b.player, a.player];
+    const after = squadStrength(S.squad).total;
+    S.swapFrom = null;
+    rerender();
+    const d = after - before;
+    toast(`Swapped · squad g+ ${d >= 0 ? '+' : ''}${d.toFixed(2)}`);
+  });
+}
+
+/** Final look at the XI, with swaps, before committing to the season. */
+function reviewScreen() {
+  S.swapFrom = null;
+  drawReview();
+}
+
+function drawReview() {
+  const { total } = squadStrength(S.squad);
+  const projected = S.sim.model.a + S.sim.model.b * (total / SEASON_GAMES);
+  render(`
+    <div class="between" style="margin-bottom:10px">
+      <div><div class="eyebrow">Squad complete</div>
+        <h2 style="font-size:20px">${esc(S.teamName)}</h2></div>
+      <div style="text-align:right"><div class="eyebrow">Projected</div>
+        <b class="mono" style="font-size:17px">${(projected * SEASON_GAMES).toFixed(0)} pts</b></div>
+    </div>
+    <div id="pane">${squadPane(true)}</div>
+    <button class="btn" id="play" style="margin-top:14px">Play the 2026 season →</button>
+    <p class="dim center" style="font-size:11.5px;margin-top:8px">
+      Last chance to rearrange. You need ${TARGET_POINTS} points and MLS Cup.</p>`, true);
+  bindSwap(drawReview);
+  on('#play', 'click', seasonScreen);
 }
 
 // ---------------------------------------------------------------- season
@@ -412,30 +488,64 @@ function seasonScreen() {
     conference: S.conference,
     teamName: S.teamName,
     rng: S.rng,
+    rosters: S.rosters,
   });
+  S.speed = 1;
+  S.skip = false;
 
   render(`
     <div class="between" style="margin-bottom:10px">
       <div><div class="eyebrow">${esc(S.teamName)} · ${S.conference}</div>
         <h2 style="font-size:20px">2026 season</h2></div>
-      <button class="btn ghost sm" id="skip">Skip →</button>
     </div>
-
-    <div class="card" style="margin-bottom:12px">
+    <div class="card" style="margin-bottom:10px">
       <div class="between" style="margin-bottom:8px">
-        <b class="mono" style="font-size:26px"><span id="pts">0</span> <span class="dim" style="font-size:13px">/ ${TARGET_POINTS} pts</span></b>
+        <b class="mono" style="font-size:26px"><span id="pts">0</span>
+          <span class="dim" style="font-size:13px">/ ${TARGET_POINTS} pts</span></b>
         <div style="text-align:right"><div class="eyebrow">Pace</div>
           <b class="mono" id="pace" style="font-size:13px">—</b></div>
       </div>
       <div class="pace"><i id="bar" style="width:0%"></i><u id="tick" style="left:0%"></u></div>
       <div class="dim" style="font-size:11px;margin-top:6px">Gold tick = the 75-point pace line</div>
     </div>
-
+    <div class="controls">
+      <button class="btn ghost sm" id="speed">▶ 1×</button>
+      <button class="btn ghost sm" id="skip">Skip to end ⏭</button>
+    </div>
     <div class="ticker" id="ticker"></div>`);
 
+  on('#speed', 'click', (e) => {
+    S.speed = S.speed === 1 ? 2 : S.speed === 2 ? 4 : 1;
+    e.currentTarget.textContent = `▶ ${S.speed}×`;
+  });
   on('#skip', 'click', () => { S.skip = true; });
-  S.skip = false;
   runTicker();
+}
+
+/** One match card: score line plus every goal, with scorer and assist. */
+function matchCard(r) {
+  const goal = (g, ours) => `
+    <div class="goal ${ours ? 'ours' : 'theirs'}">
+      <span class="min">${g.minute}'</span>
+      <span class="who2">${g.scorer ? esc(shortName(g.scorer)) : 'Own goal'}</span>
+      ${g.assister ? `<span class="ast">${esc(shortName(g.assister))}</span>` : ''}
+    </div>`;
+  const all = [
+    ...r.scorers.map((g) => ({ ...g, ours: true })),
+    ...r.conceded.map((g) => ({ ...g, ours: false })),
+  ].sort((a, b) => a.minute - b.minute);
+
+  return `
+    <div class="res">
+      <div class="res-top">
+        <div class="md">MD${r.matchday}</div>
+        <div class="op">${avatar(BADGE(r.opp.id), r.opp.abbr)}
+          <span>${r.home ? 'vs' : '@'} ${esc(r.opp.abbr)}</span></div>
+        <div class="sc2 mono">${r.gf}–${r.ga}</div>
+        <div class="wl ${r.result}">${r.result}</div>
+      </div>
+      ${all.length ? `<div class="goals">${all.map((g) => goal(g, g.ours)).join('')}</div>` : ''}
+    </div>`;
 }
 
 async function runTicker() {
@@ -447,15 +557,10 @@ async function runTicker() {
 
   for (const r of S.season.results) {
     const row = document.createElement('div');
-    row.className = 'res';
-    row.innerHTML = `
-      <div class="md">MD${r.matchday}</div>
-      <div class="op">${avatar(BADGE(r.opp.id), r.opp.abbr)}
-        <span>${r.home ? 'vs' : '@'} ${esc(r.opp.abbr)}</span></div>
-      <div class="sc2 mono">${r.gf}–${r.ga}</div>
-      <div class="wl ${r.result}">${r.result}</div>`;
-    ticker.prepend(row);
-    mountAvatars(row);
+    row.innerHTML = matchCard(r);
+    const card = row.firstElementChild;
+    ticker.prepend(card);
+    mountAvatars(card);
 
     ptsEl.textContent = r.pts;
     const pace = (TARGET_POINTS * r.matchday) / SEASON_GAMES;
@@ -465,10 +570,35 @@ async function runTicker() {
     bar.style.width = `${Math.min(100, (r.pts / TARGET_POINTS) * 100)}%`;
     tick.style.left = `${(r.matchday / SEASON_GAMES) * 100}%`;
 
-    if (!S.skip) await wait(r.matchday < 3 ? 260 : 130);
+    if (!S.skip) await wait((900 + r.scorers.length * 220) / S.speed);
   }
-  await wait(500);
+  await wait(600);
   standingsScreen();
+}
+
+function awardsCard(awards, title = 'Season leaders') {
+  if (!awards.scorers.length && !awards.assisters.length) return '';
+  const list = (rows, key, unit) => (rows.length ? rows.map((t, i) => `
+      <div class="lead ${i === 0 ? 'top' : ''}">
+        <span class="rank">${i + 1}</span>
+        <span class="lname">${esc(t.name)}</span>
+        <span class="dim" style="font-size:10px">${t.pos}</span>
+        <b class="mono">${t[key]}${unit}</b>
+      </div>`).join('') : '<div class="dim" style="font-size:12px">None</div>');
+  return `
+    <div class="card" style="margin-top:12px">
+      <div class="eyebrow" style="margin-bottom:8px">${esc(title)}</div>
+      <div class="leadgrid">
+        <div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">Goals</div>
+          ${list(awards.scorers, 'goals', '')}
+        </div>
+        <div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">Assists</div>
+          ${list(awards.assisters, 'assists', '')}
+        </div>
+      </div>
+    </div>`;
 }
 
 function standingsScreen() {
@@ -492,55 +622,112 @@ function standingsScreen() {
       </table>
     </div>
     <p class="dim center" style="font-size:11px;margin-top:8px">Gold line = playoff cut (top 8)</p>
+    ${awardsCard(S.season.awards)}
     <button class="btn" id="go" style="margin-top:14px">
       ${S.season.madePlayoffs ? 'Into the playoffs →' : 'See how it ended →'}
     </button>`);
   on('#go', 'click', () => (S.season.madePlayoffs ? playoffScreen() : endScreen()));
 }
 
+// ---------------------------------------------------------------- playoffs
+
 function playoffScreen() {
+  S.speed = 1;
+  S.skip = false;
+  render(`
+    <div class="eyebrow">MLS Cup Playoffs</div>
+    <h2 style="font-size:20px;margin-bottom:10px">Your run</h2>
+    <div class="controls">
+      <button class="btn ghost sm" id="speed">▶ 1×</button>
+      <button class="btn ghost sm" id="skip">Skip to end ⏭</button>
+    </div>
+    <div class="bracket" id="bracket"></div>
+    <div id="after"></div>`);
+  on('#speed', 'click', (e) => {
+    S.speed = S.speed === 1 ? 2 : S.speed === 2 ? 4 : 1;
+    e.currentTarget.textContent = `▶ ${S.speed}×`;
+  });
+  on('#skip', 'click', () => { S.skip = true; });
+  runPlayoffs();
+}
+
+async function runPlayoffs() {
   const { playoffs } = S.season;
+  const bracket = document.getElementById('bracket');
   const ties = [...playoffs.userTies];
   const cup = playoffs.rounds[playoffs.rounds.length - 1];
   if (!ties.includes(cup)) ties.push(cup);
 
-  render(`
-    <div class="eyebrow">MLS Cup Playoffs</div>
-    <h2 style="font-size:20px;margin-bottom:12px">Your run</h2>
-    <div class="bracket">${ties.map((t) => tieCard(t)).join('')}</div>
-    <button class="btn" id="go" style="margin-top:16px">Final verdict →</button>`);
-  on('#go', 'click', endScreen);
+  for (const t of ties) {
+    const box = document.createElement('div');
+    box.innerHTML = tieCard(t);
+    const card = box.firstElementChild;
+    bracket.appendChild(card);
+    mountAvatars(card);
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (!S.skip) await wait(1500 / S.speed);
+  }
+
+  const after = document.getElementById('after');
+  after.innerHTML = `${awardsCard(S.season.awards, 'Regular-season leaders')}
+    <button class="btn" id="go" style="margin-top:14px">Final verdict →</button>`;
+  after.querySelector('#go').addEventListener('click', endScreen);
+}
+
+/** Goal lines for one playoff game, from the winner-agnostic scorer lists. */
+function gameGoals(list, ours) {
+  if (!list || !list.length) return '';
+  return list.map((g) => `
+    <div class="goal ${ours ? 'ours' : 'theirs'}">
+      <span class="min">${g.minute}'</span>
+      <span class="who2">${g.scorer ? esc(shortName(g.scorer)) : '—'}</span>
+      ${g.assister ? `<span class="ast">${esc(shortName(g.assister))}</span>` : ''}
+    </div>`).join('');
 }
 
 function tieCard(t) {
   const isUser = (c) => c && c.isUser;
   const name = (c) => (c.isUser ? S.teamName : c.short);
-  // Seeds are per-conference, so in the Cup final tag them E/W to tell two
-  // #3 seeds apart.
   const seedOf = (c) => (c.seed ? (t.conf === 'Cup' ? `${c.conf[0]}${c.seed}` : `#${c.seed}`) : '');
   const side = (c, lost) => `<div class="side ${lost ? 'lost' : ''}">
       ${avatar(c.isUser ? '' : BADGE(c.id), c.abbr)}
       <span>${esc(name(c))}</span><span class="dim" style="font-size:10px">${seedOf(c)}</span>
     </div>`;
-
   const head = (round, conf) => `<div class="eyebrow" style="margin-bottom:4px">`
     + `${round}${conf && conf !== 'Cup' ? ` · ${conf}` : ''}</div>`;
+  const involved = isUser(t.high) || isUser(t.low) || isUser(t.host) || isUser(t.away);
 
   if (t.games) { // best-of-three
     const loser = t.winner === t.high ? t.low : t.high;
-    // Always read the series from the winner's side: "2-1", never "1-2".
     const [a, b] = t.series.split('-').map(Number);
-    return `<div class="tie ${isUser(t.high) || isUser(t.low) ? 'you' : ''}">
-      <div>${head(t.round, t.conf)}${side(t.winner, false)}${side(loser, true)}</div>
-      <div class="meta">${Math.max(a, b)}–${Math.min(a, b)}<br>series</div>
+    const legs = t.games.map((g, i) => `
+      <div class="leg">
+        <div class="leg-head">Game ${i + 1} · ${g.highHosts ? esc(t.high.abbr) : esc(t.low.abbr)}
+          <b class="mono">${g.highGoals}–${g.lowGoals}</b>${g.pens ? ' <span class="dim">(pens)</span>' : ''}</div>
+        ${gameGoals(g.highScorers, isUser(t.high))}
+        ${gameGoals(g.lowScorers, isUser(t.low))}
+      </div>`).join('');
+    return `<div class="tie ${involved ? 'you' : ''}">
+      <div class="tie-top">
+        <div>${head(t.round, t.conf)}${side(t.winner, false)}${side(loser, true)}</div>
+        <div class="meta">${Math.max(a, b)}–${Math.min(a, b)}<br>series</div>
+      </div>
+      <div class="legs">${legs}</div>
     </div>`;
   }
   const loser = t.winner === t.host ? t.away : t.host;
   const wg = t.winner === t.host ? t.hg : t.ag;
   const lg = t.winner === t.host ? t.ag : t.hg;
-  return `<div class="tie ${isUser(t.host) || isUser(t.away) ? 'you' : ''}">
-    <div>${head(t.round, t.conf)}${side(t.winner, false)}${side(loser, true)}</div>
-    <div class="meta">${wg}–${lg}<br>${t.pens ? 'on pens' : `at ${esc(t.host.abbr)}`}</div>
+  // A goalless tie has nothing to list -- skip the block rather than draw an
+  // empty divider.
+  const goals = gameGoals(t.hostScorers, isUser(t.host))
+    + gameGoals(t.awayScorers, isUser(t.away));
+  return `<div class="tie ${involved ? 'you' : ''}">
+    <div class="tie-top">
+      <div>${head(t.round, t.conf)}${side(t.winner, false)}${side(loser, true)}</div>
+      <div class="meta">${wg}–${lg}<br>${t.pens ? 'on pens' : `at ${esc(t.host.abbr)}`}</div>
+    </div>
+    ${goals ? `<div class="legs"><div class="leg">${goals}</div></div>` : ''}
   </div>`;
 }
 
@@ -578,21 +765,22 @@ function endScreen() {
 
     <div class="card" style="margin-top:12px">
       <div class="between">
-        <div><div class="eyebrow">Squad g+</div><b class="mono" style="font-size:18px">${r.strength > 0 ? '+' : ''}${r.strength.toFixed(1)}</b></div>
+        <div><div class="eyebrow">Squad g+</div>
+          <b class="mono" style="font-size:18px">${r.strength > 0 ? '+' : ''}${r.strength.toFixed(1)}</b></div>
         <div style="text-align:right"><div class="eyebrow">Best pick</div>
           <b style="font-size:14px">${esc(best.name)}</b>
           <div class="dim" style="font-size:11px">${best.season} · +${best.score.toFixed(2)}</div></div>
       </div>
     </div>
 
-    <div style="margin-top:12px">${squadPane()}</div>
+    ${awardsCard(r.awards, 'Regular-season leaders')}
+    <div style="margin-top:12px">${squadPane(false)}</div>
 
     <div class="card" style="margin-top:12px">
       <div class="eyebrow" style="margin-bottom:8px">Share</div>
       <div class="share">${esc(shareText())}</div>
       <button class="btn sm" id="copy" style="width:100%;margin-top:12px">Copy result</button>
     </div>
-
     <button class="btn ghost" id="again" style="margin-top:12px">Play again</button>`);
 
   on('#copy', 'click', async () => {
@@ -618,10 +806,12 @@ function shareText(withLink = false) {
   const marks = r.results.map((x) => ({ W: '🟩', D: '🟨', L: '🟥' }[x.result]));
   const rows = [marks.slice(0, 17).join(''), marks.slice(17).join('')];
   const cup = r.wonCup ? '🏆 MLS Cup' : (r.madePlayoffs ? `Out in ${lastRound()}` : 'No playoffs');
+  const top = r.awards.allScorers[0];
   return [
     `Road to 75 ⚽ ${DIFFICULTIES[S.difficulty].label} · ${S.formation}`,
     `${r.points} pts · ${cup}${r.won ? ' · IMMORTAL 👑' : ''}`,
     ...rows,
+    top ? `⚽ ${shortName(top.name)} ${top.goals}` : '',
     withLink ? window.location.origin + window.location.pathname : '',
   ].filter(Boolean).join('\n');
 }

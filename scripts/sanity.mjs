@@ -9,8 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeSquad, MAX_DPS, SQUAD_SIZE } from '../src/rules.js';
-import { loadPool, makeRng, drawSpin } from '../src/pool.js';
+import { makeSquad, MAX_DPS, SQUAD_SIZE, FORMATIONS, SLOTS } from '../src/rules.js';
+import { loadPool, makeRng, drawSpin, currentRosters } from '../src/pool.js';
 import { openSlotsFor, blockReason } from '../src/rules.js';
 import {
   simSeason, simMatch, squadStrength, K_STRENGTH, SEASON_GAMES, TARGET_POINTS,
@@ -20,12 +20,13 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (f) => JSON.parse(fs.readFileSync(path.join(root, '..', 'public', 'data', f)));
 const pool = loadPool(read('pool.json'));
 const sim = read('sim.json');
+const rosters = currentRosters(pool);
 const { a, b, sigma } = sim.model;
 
 const mean = (v) => v.reduce((s, x) => s + x, 0) / v.length;
 const sd = (v) => Math.sqrt(mean(v.map((x) => (x - mean(v)) ** 2)));
 const quant = (v, q) => [...v].sort((x, y) => x - y)[Math.floor(q * (v.length - 1))];
-const FORMATIONS = ['4-3-3', '4-4-2', '4-2-3-1', '3-5-2', '5-3-2'];
+const FORMATION_NAMES = Object.keys(FORMATIONS);
 
 // ---------------------------------------------------------------- draft bots
 
@@ -36,7 +37,7 @@ const FORMATIONS = ['4-3-3', '4-4-2', '4-2-3-1', '3-5-2', '5-3-2'];
  *   strategy 'good'   -- take the best of a random 3 (a decent human)
  */
 function draft(strategy, rng, rerolls = 3) {
-  const formation = FORMATIONS[Math.floor(rng() * FORMATIONS.length)];
+  const formation = FORMATION_NAMES[Math.floor(rng() * FORMATION_NAMES.length)];
   const squad = makeSquad(formation);
   const picked = new Set();
   let dead = 0;
@@ -59,9 +60,9 @@ function draft(strategy, rng, rerolls = 3) {
       choice = legal[Math.floor(rng() * legal.length)];
     }
 
-    const slots = openSlotsFor(choice, squad);
-    // Prefer a starting slot; only bench a player when nothing else is open.
-    const slot = slots.find((s) => s.starter) || slots[0];
+    // openSlotsFor is sorted cheapest-penalty first, starters ahead of bench.
+    const options = openSlotsFor(choice, squad);
+    const slot = (options.find((o) => o.slot.starter) || options[0]).slot;
     slot.player = choice;
     picked.add(choice.id);
   }
@@ -127,7 +128,10 @@ function checkCalibration(k) {
 }
 
 function runBatch(strategy, runs, seed0) {
-  const out = { pts: [], strength: [], cup: 0, playoffs: 0, wins: 0, dead: 0, dps: [] };
+  const out = {
+    pts: [], strength: [], cup: 0, playoffs: 0, wins: 0, dead: 0, dps: [],
+    topScorer: [], topAssist: [], scorerShare: [],
+  };
   for (let i = 0; i < runs; i++) {
     const rng = makeRng(seed0 + i);
     const { squad, dead } = draft(strategy, rng);
@@ -137,7 +141,15 @@ function runBatch(strategy, runs, seed0) {
       conference: i % 2 ? 'East' : 'West',
       teamName: 'Test FC',
       rng,
+      rosters,
     });
+    const scorer = res.awards.scorers[0];
+    const assister = res.awards.assisters[0];
+    if (scorer && res.userRecord.gf > 0) {
+      out.topScorer.push(scorer.goals);
+      out.scorerShare.push(scorer.goals / res.userRecord.gf);
+    }
+    if (assister) out.topAssist.push(assister.assists);
     out.pts.push(res.points);
     out.strength.push(squadStrength(squad).spg);
     out.dead += dead;
@@ -157,6 +169,34 @@ function report(label, r, runs) {
     + `  playoffs ${((r.playoffs / runs) * 100).toFixed(0).padStart(3)}%`
     + `  cup ${((r.cup / runs) * 100).toFixed(0).padStart(3)}%`
     + `  75+&cup ${((r.wins / runs) * 100).toFixed(1).padStart(4)}%`);
+}
+
+/**
+ * Pitch cards are ~18% of the pitch wide and ~16% tall, so two slots closer
+ * than that horizontally must clear it vertically or their photos and names
+ * collide.
+ */
+function checkFormations() {
+  const CARD_W = 18; const CARD_H = 17;
+  const problems = [];
+  for (const [name, slots] of Object.entries(FORMATIONS)) {
+    if (slots.length !== 11) problems.push(`${name}: ${slots.length} slots, expected 11`);
+    for (const s of slots) {
+      if (!SLOTS[s.pos]) problems.push(`${name}: unknown slot ${s.pos}`);
+      if (s.y < 6 || s.y > 94 || s.x < 9 || s.x > 91) {
+        problems.push(`${name}: ${s.pos} at (${s.x},${s.y}) runs off the pitch`);
+      }
+    }
+    for (let i = 0; i < slots.length; i++) {
+      for (let j = i + 1; j < slots.length; j++) {
+        const a = slots[i]; const b = slots[j];
+        if (Math.abs(a.x - b.x) < CARD_W && Math.abs(a.y - b.y) < CARD_H) {
+          problems.push(`${name}: ${a.pos}(${a.x},${a.y}) overlaps ${b.pos}(${b.x},${b.y})`);
+        }
+      }
+    }
+  }
+  return problems;
 }
 
 function main() {
@@ -190,6 +230,21 @@ function main() {
     quant(D.pts, 0.5) >= medRandom && quant(D.pts, 0.5) <= quant(G.pts, 0.5), quant(D.pts, 0.5)]);
   ok.push(['DP cap never breached', [...R.dps, ...G.dps].every((d) => d <= MAX_DPS), Math.max(...G.dps)]);
   ok.push(['no draft soft-locked', true, `${R.dead + G.dead + D.dead} free respins`]);
+  const geom = checkFormations();
+  ok.push(['formations fit the pitch without overlap', geom.length === 0,
+    geom.length ? geom[0] : 'all 5 clean']);
+
+  // Golden Boot realism: the MLS single-season record is 34, and real winners
+  // take roughly a quarter to two fifths of their club's goals.
+  const gTop = quant(G.topScorer, 0.5);
+  const gMax = Math.max(...G.topScorer);
+  const share = mean(G.scorerShare);
+  ok.push(['top scorer is a believable Golden Boot', gTop >= 12 && gTop <= 26, `median ${gTop}`]);
+  ok.push(['nobody posts an absurd goal tally', gMax <= 45, `max ${gMax}`]);
+  ok.push(['one player does not monopolise the goals', share >= 0.18 && share <= 0.36,
+    `${(share * 100).toFixed(0)}% of team goals`]);
+  ok.push(['top assister is believable', quant(G.topAssist, 0.5) >= 6 && quant(G.topAssist, 0.5) <= 20,
+    `median ${quant(G.topAssist, 0.5)}`]);
 
   let failed = 0;
   for (const [name, pass, val] of ok) {

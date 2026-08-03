@@ -11,6 +11,8 @@
 // reproduce the fitted line -- the match randomness alone then generates
 // close to the observed residual spread, so no extra season noise is added.
 
+import { effectiveScore } from './rules.js';
+
 export const BASE_GOALS = 1.4;      // league goals per team per game
 export const HOME_LOG = 0.2494;     // ~ +0.35 expected goal difference at home
 export const K_STRENGTH = 0.75;     // per-game g+ edge -> log goals
@@ -19,14 +21,94 @@ export const SEASON_GAMES = 34;
 export const TARGET_POINTS = 75;
 export const SUB_WEIGHT = 0.3;      // subs contribute at 30% toward strength
 
-/** Squad strength per game: starting XI in full, subs at SUB_WEIGHT. */
+/**
+ * Squad strength per game: starting XI in full, subs at SUB_WEIGHT. Scores
+ * are the post-penalty ones, so playing a left back on the right or a DM in
+ * midfield costs the team real strength.
+ */
 export function squadStrength(squad) {
   let total = 0;
   for (const s of squad) {
     if (!s.player) continue;
-    total += s.starter ? s.player.score : s.player.score * SUB_WEIGHT;
+    const score = effectiveScore(s.player, s.pos);
+    total += s.starter ? score : score * SUB_WEIGHT;
   }
   return { total, spg: total / SEASON_GAMES };
+}
+
+// ------------------------------------------------------- goals and assists
+
+// Roughly how goals and assists split across positions, before a player's own
+// record is taken into account. Keeps defenders scoring occasionally and stops
+// anyone with no event data (2020 has no event feed) from being unscoreable.
+//
+// Tuned so a lone striker takes about a quarter of his team's goals rather
+// than half: real Golden Boot winners land near 20-25% of their club's total,
+// and the weights are deliberately flat enough that midfielders and defenders
+// still turn up on the scoresheet.
+const GOAL_BASE = { GK: 0.002, CB: 0.05, FB: 0.04, DM: 0.07, CM: 0.11, AM: 0.17, W: 0.21, ST: 0.30 };
+const ASSIST_BASE = { GK: 0.004, CB: 0.05, FB: 0.13, DM: 0.09, CM: 0.16, AM: 0.22, W: 0.22, ST: 0.15 };
+// How hard a player's own scoring record pulls against the positional prior.
+// Kept modest so a prolific forward stands out without monopolising the team.
+const RECORD_WEIGHT = 0.5;
+const ASSISTED_SHARE = 0.72; // share of goals that get an assist credited
+
+/**
+ * Build weighted goal/assist tables for a set of players.
+ * `minutesWeighted` scales by playing time, for opposition squads where the
+ * whole roster is in the pool rather than a chosen XI.
+ */
+export function scorerPool(players, minutesWeighted = false) {
+  return players.map((p) => {
+    const share = minutesWeighted ? Math.min(1, (p.minutes || 0) / 2600) : 1;
+    return {
+      id: p.id,
+      name: p.name,
+      pos: p.pos,
+      goal: ((GOAL_BASE[p.pos] || 0.05) + RECORD_WEIGHT * (p.g90 || 0)) * share,
+      assist: ((ASSIST_BASE[p.pos] || 0.05) + RECORD_WEIGHT * (p.a90 || 0)) * share,
+    };
+  }).filter((p) => p.goal > 0 || p.assist > 0);
+}
+
+function weightedPick(pool, key, rng, exclude) {
+  let total = 0;
+  for (const p of pool) if (p !== exclude) total += p[key];
+  if (total <= 0) return null;
+  let r = rng() * total;
+  for (const p of pool) {
+    if (p === exclude) continue;
+    r -= p[key];
+    if (r <= 0) return p;
+  }
+  return null;
+}
+
+/** Who scored, who assisted, and when -- for one team's goals in a match. */
+function attribute(pool, goals, rng, tally) {
+  const out = [];
+  for (let i = 0; i < goals; i++) {
+    const minute = 1 + Math.floor(rng() * 90);
+    const scorer = pool && pool.length ? weightedPick(pool, 'goal', rng, null) : null;
+    let assister = null;
+    if (scorer && pool.length > 1 && rng() < ASSISTED_SHARE) {
+      assister = weightedPick(pool, 'assist', rng, scorer);
+    }
+    if (tally && scorer) {
+      const t = tally[scorer.id] || (tally[scorer.id] = { name: scorer.name, pos: scorer.pos, goals: 0, assists: 0 });
+      t.goals++;
+    }
+    if (tally && assister) {
+      const t = tally[assister.id] || (tally[assister.id] = { name: assister.name, pos: assister.pos, goals: 0, assists: 0 });
+      t.assists++;
+    }
+    out.push({
+      minute,
+      scorer: scorer ? scorer.name : null,
+      assister: assister ? assister.name : null,
+    });
+  }
+  return out.sort((a, b) => a.minute - b.minute);
 }
 
 function poisson(lambda, rng) {
@@ -92,10 +174,11 @@ export function buildSchedule(clubs, conference, rng) {
  * opponents drawn from the league, which produces coherent tables and
  * realistic strength-of-schedule variety.
  */
-export function simRegularSeason(userClub, opponents, conference, rng) {
+export function simRegularSeason(userClub, opponents, conference, rng, ctx = {}) {
   const clubs = [userClub, ...opponents];
   const table = new Map(clubs.map((c) => [c.id, blankRecord(c)]));
   const userRec = table.get(userClub.id);
+  const { squadPool, oppPools = {}, tally } = ctx;
 
   const fixtures = buildSchedule(clubs, conference, rng);
   const results = [];
@@ -110,6 +193,8 @@ export function simRegularSeason(userClub, opponents, conference, rng) {
       matchday: f.matchday, opp: f.opp, home: f.home, gf, ga,
       pts: userRec.pts,
       result: gf > ga ? 'W' : gf === ga ? 'D' : 'L',
+      scorers: attribute(squadPool, gf, rng, tally),
+      conceded: attribute(oppPools[f.opp.id], ga, rng, null),
     });
   }
 
@@ -138,8 +223,19 @@ export function simRegularSeason(userClub, opponents, conference, rng) {
 
 // ------------------------------------------------------------------ playoffs
 
+/**
+ * Name the scorers for one club's goals in a playoff tie. The player's own
+ * goals are tallied toward their squad awards; opposition goals are named
+ * from that club's current roster but not tallied.
+ */
+function goalsFor(club, n, rng, ctx) {
+  if (!n) return [];
+  const pool = club.isUser ? ctx.squadPool : (ctx.oppPools || {})[club.id];
+  return attribute(pool, n, rng, club.isUser ? ctx.tally : null);
+}
+
 /** Best-of-3 Round One. Drawn games go straight to a shootout, as in MLS. */
-function bestOfThree(high, low, rng) {
+function bestOfThree(high, low, rng, ctx = {}) {
   let hw = 0; let lw = 0; const games = [];
   for (let g = 0; g < 3 && hw < 2 && lw < 2; g++) {
     const highHosts = g !== 1; // higher seed hosts games 1 and 3
@@ -158,13 +254,17 @@ function bestOfThree(high, low, rng) {
       winner = highGoals > lowGoals ? high : low;
     }
     if (winner === high) hw++; else lw++;
-    games.push({ highGoals, lowGoals, highHosts, pens, winner: winner.id });
+    games.push({
+      highGoals, lowGoals, highHosts, pens, winner: winner.id,
+      highScorers: goalsFor(high, highGoals, rng, ctx),
+      lowScorers: goalsFor(low, lowGoals, rng, ctx),
+    });
   }
   return { winner: hw > lw ? high : low, games, series: `${hw}-${lw}` };
 }
 
 /** Single-elimination tie hosted by the better seed; draw => shootout. */
-function knockout(a, b, rng) {
+function knockout(a, b, rng, ctx = {}) {
   const [host, away] = a.seed <= b.seed ? [a, b] : [b, a];
   const { hg, ag } = simMatch(host.spg, away.spg, rng);
   let winner; let pens = false;
@@ -174,11 +274,15 @@ function knockout(a, b, rng) {
   } else {
     winner = hg > ag ? host : away;
   }
-  return { winner, host, away, hg, ag, pens };
+  return {
+    winner, host, away, hg, ag, pens,
+    hostScorers: goalsFor(host, hg, rng, ctx),
+    awayScorers: goalsFor(away, ag, rng, ctx),
+  };
 }
 
 /** Top 8 per conference, Round One best-of-3, then single elimination. */
-export function simPlayoffs(standings, userId, rng) {
+export function simPlayoffs(standings, userId, rng, ctx = {}) {
   const rounds = [];
   const confWinners = {};
 
@@ -186,23 +290,23 @@ export function simPlayoffs(standings, userId, rng) {
     const seeds = standings[conf].slice(0, 8);
     const r1 = [];
     for (const [hi, lo] of [[0, 7], [1, 6], [2, 5], [3, 4]]) {
-      const tie = bestOfThree(seeds[hi], seeds[lo], rng);
+      const tie = bestOfThree(seeds[hi], seeds[lo], rng, ctx);
       r1.push({ conf, round: 'Round One', high: seeds[hi], low: seeds[lo], ...tie });
     }
     let alive = r1.map((t) => t.winner).sort((a, b) => a.seed - b.seed);
 
     const semis = [
-      knockout(alive[0], alive[3], rng),
-      knockout(alive[1], alive[2], rng),
+      knockout(alive[0], alive[3], rng, ctx),
+      knockout(alive[1], alive[2], rng, ctx),
     ].map((t) => ({ conf, round: 'Conference Semifinal', ...t }));
     alive = semis.map((t) => t.winner).sort((a, b) => a.seed - b.seed);
 
-    const final = { conf, round: 'Conference Final', ...knockout(alive[0], alive[1], rng) };
+    const final = { conf, round: 'Conference Final', ...knockout(alive[0], alive[1], rng, ctx) };
     confWinners[conf] = final.winner;
     rounds.push(...r1, ...semis, final);
   }
 
-  const cup = { conf: 'Cup', round: 'MLS Cup', ...knockout(confWinners.East, confWinners.West, rng) };
+  const cup = { conf: 'Cup', round: 'MLS Cup', ...knockout(confWinners.East, confWinners.West, rng, ctx) };
   rounds.push(cup);
 
   return {
@@ -214,19 +318,45 @@ export function simPlayoffs(standings, userId, rng) {
   };
 }
 
-/** Full season: regular season, playoffs (if the player qualifies), verdict. */
-export function simSeason({ squad, opponents, conference, teamName, rng }) {
+/** Rank a goal/assist tally into a leaderboard. */
+function leaderboard(tally, key) {
+  return Object.entries(tally)
+    .map(([id, t]) => ({ id, ...t }))
+    .filter((t) => t[key] > 0)
+    .sort((a, b) => b[key] - a[key] || b.goals - a.goals)
+    .slice(0, 5);
+}
+
+/**
+ * Full season: regular season, playoffs (if the player qualifies), verdict.
+ *
+ * `rosters` maps club id -> current squad, used to name opposition scorers.
+ * Goals and assists are tallied for the player's own squad across both the
+ * regular season and the playoff run.
+ */
+export function simSeason({ squad, opponents, conference, teamName, rng, rosters = {} }) {
   const { total, spg } = squadStrength(squad);
   const userClub = {
     id: '__user__', abbr: 'YOU', name: teamName || 'Your Club',
     short: teamName || 'Your Club', conf: conference, spg, isUser: true,
   };
-  const season = simRegularSeason(userClub, opponents, conference, rng);
+
+  const tally = {};
+  const ctx = {
+    tally,
+    squadPool: scorerPool(squad.filter((s) => s.starter && s.player).map((s) => s.player)),
+    oppPools: Object.fromEntries(
+      Object.entries(rosters).map(([id, r]) => [id, scorerPool(r, true)]),
+    ),
+  };
+
+  const season = simRegularSeason(userClub, opponents, conference, rng, ctx);
   const table = season.standings[conference];
   const userRow = table.find((c) => c.id === userClub.id);
   const madePlayoffs = userRow.seed <= 8;
 
-  const playoffs = simPlayoffs(season.standings, userClub.id, rng);
+  const regularTally = JSON.parse(JSON.stringify(tally));
+  const playoffs = simPlayoffs(season.standings, userClub.id, rng, ctx);
   const points = season.userRecord.pts;
 
   return {
@@ -237,6 +367,11 @@ export function simSeason({ squad, opponents, conference, teamName, rng }) {
     madePlayoffs,
     playoffs,
     points,
+    awards: {
+      scorers: leaderboard(regularTally, 'goals'),
+      assisters: leaderboard(regularTally, 'assists'),
+      allScorers: leaderboard(tally, 'goals'),
+    },
     wonCup: madePlayoffs && playoffs.wonCup,
     won: points >= TARGET_POINTS && madePlayoffs && playoffs.wonCup,
   };
