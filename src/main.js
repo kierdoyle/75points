@@ -531,7 +531,7 @@ function squadPane(interactive = false) {
       <div><div class="eyebrow">Squad g+</div>
         <b class="mono" style="font-size:19px">${total > 0 ? '+' : ''}${total.toFixed(1)}</b></div>
       <div class="dim" style="font-size:12px;text-align:right">${S.formation} · ${filled}/${SQUAD_SIZE} filled<br>
-        After position penalties · subs at 30%</div>
+        Starters 91% · subs 30% · after penalties</div>
     </div>`;
 }
 

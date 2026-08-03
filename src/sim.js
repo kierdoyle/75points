@@ -19,19 +19,22 @@ export const K_STRENGTH = 0.75;     // per-game g+ edge -> log goals
 export const MIN_LAMBDA = 0.2;
 export const SEASON_GAMES = 34;
 export const TARGET_POINTS = 75;
-export const SUB_WEIGHT = 0.3;      // subs contribute at 30% toward strength
+// Nobody plays every minute of every game: starters carry most of a season,
+// substitutes chip in from the bench.
+export const STARTER_WEIGHT = 0.91;
+export const SUB_WEIGHT = 0.30;
 
 /**
- * Squad strength per game: starting XI in full, subs at SUB_WEIGHT. Scores
- * are the post-penalty ones, so playing a left back on the right or a DM in
- * midfield costs the team real strength.
+ * Squad strength per game: starters at STARTER_WEIGHT, subs at SUB_WEIGHT.
+ * Scores are the post-penalty ones, so playing a left back on the right or a
+ * DM in midfield costs the team real strength.
  */
 export function squadStrength(squad) {
   let total = 0;
   for (const s of squad) {
     if (!s.player) continue;
     const score = effectiveScore(s.player, s.pos);
-    total += s.starter ? score : score * SUB_WEIGHT;
+    total += score * (s.starter ? STARTER_WEIGHT : SUB_WEIGHT);
   }
   return { total, spg: total / SEASON_GAMES };
 }

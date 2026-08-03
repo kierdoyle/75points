@@ -35,7 +35,7 @@ U22_CHARGE = 200_000         # ages 21-25
 
 # Players below this many minutes in a season are dropped from spin rosters:
 # tiny samples make g+ totals noise, and they'd just be filler picks.
-MIN_MINUTES = 180
+MIN_MINUTES = 500
 
 # 2020 was the COVID short season (23 games, bubble tournament) -- excluded
 # from the calibration fit.

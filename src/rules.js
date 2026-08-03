@@ -29,10 +29,11 @@ export const U22_MAX_AGE = 22;
 export const U22_CHARGE_YOUNG = 150_000; // age 20 or younger
 export const U22_CHARGE = 200_000;       // ages 21-22
 
-// Playing a sided player on their wrong flank, or a midfielder one step out of
-// their band, costs them some of their g+.
-export const SIDE_SWAP_PENALTY = 0.20;
-export const OUT_OF_POSITION_PENALTY = 0.10;
+// A player is only at full strength in the exact role they filled in the
+// season they were spun from -- same position, same flank. Anywhere else they
+// can play, whether that comes from another season of their career or from
+// covering an adjacent role, costs them a fifth of their g+.
+export const ALT_POSITION_PENALTY = 0.20;
 
 export const DIFFICULTIES = {
   easy: { label: 'Easy', rerolls: 5, maxDPs: Infinity, salaryCap: false, note: 'Unlimited DPs' },
@@ -150,11 +151,12 @@ export function makeSquad(formation) {
  * What it costs to play this player in this slot, or null if they can't.
  * Returns { penalty, reasons } where penalty is the fraction of g+ lost.
  *
- * A position the player has held in any season of their career counts as
- * native, so a utility man who has a W season and an AM season plays both for
- * free -- and can even fill a slot his spun position couldn't reach. The same
- * applies to flanks: a fullback who has spent a season on each side switches
- * without penalty.
+ * Eligibility is generous: the role they filled in the spun season, any role
+ * they have held in another season of their career, or an adjacent one their
+ * position can cover. Full strength is not. Only the exact role from the spun
+ * season -- same position and, where the slot has one, same flank -- comes
+ * free. Everything else is a single flat ALT_POSITION_PENALTY; being both out
+ * of position and on the wrong flank does not double up.
  */
 export function fitFor(player, slotPos) {
   const slot = SLOTS[slotPos];
@@ -162,34 +164,32 @@ export function fitFor(player, slotPos) {
 
   const careerPos = player.positions && player.positions.length
     ? player.positions : [player.pos];
-  const native = careerPos.some((p) => slot.native.includes(p));
-  const off = !native && careerPos.some((p) => slot.off.includes(p));
-  if (!native && !off) return null;
+  const eligible = careerPos.some((p) => slot.native.includes(p) || slot.off.includes(p))
+    || slot.native.includes(player.pos) || slot.off.includes(player.pos);
+  if (!eligible) return null;
+
+  // What they actually did in the season they were spun from.
+  const samePosition = slot.native.includes(player.pos);
+  const sameFlank = slot.flank === SIDES.NONE || !player.side || player.side === slot.flank;
+  if (samePosition && sameFlank) return { penalty: 0, reasons: [] };
 
   const reasons = [];
-  let penalty = 0;
-  if (off) {
-    penalty += OUT_OF_POSITION_PENALTY;
-    reasons.push('Out of position');
-  }
-  // Only a player with a known flank pays for switching, and only when the
-  // slot itself has a flank. Anyone who covered both sides -- in the spun
-  // season or anywhere in their career -- moves freely.
-  const careerSides = player.sides && player.sides.length
-    ? player.sides : (player.side ? [player.side] : []);
-  if (slot.flank !== SIDES.NONE && native
-      && careerSides.length && !careerSides.includes(slot.flank)) {
-    penalty += SIDE_SWAP_PENALTY;
-    reasons.push('Wrong flank');
-  }
-  return { penalty, reasons };
+  if (!samePosition) reasons.push('Off their listed position');
+  if (!sameFlank) reasons.push('Wrong flank');
+  return { penalty: ALT_POSITION_PENALTY, reasons };
 }
 
-/** A player's effective g+ once slot penalties are applied. */
+/**
+ * A player's effective g+ once slot penalties are applied.
+ *
+ * The penalty is taken off the magnitude, not scaled through the sign --
+ * otherwise a below-average player would get *better* by being shoved out of
+ * position, since shrinking a negative number moves it toward zero.
+ */
 export function effectiveScore(player, slotPos) {
   const fit = fitFor(player, slotPos);
   if (!fit) return 0;
-  return player.score * (1 - fit.penalty);
+  return player.score - Math.abs(player.score) * fit.penalty;
 }
 
 export function canPlay(player, slotPos) {

@@ -70,32 +70,32 @@ three go into the share text.
 
 ### Draft rules
 
-**Positions are locked.** A centre back only plays centre back, a winger only
-plays wing, a striker only plays striker. Two kinds of move are allowed, and
-both cost g+:
+**A player is only at full strength in the exact role they filled in the season
+they were spun from** — same position, and same flank if the slot has one.
+Anywhere else costs a flat **−20%**, whether that role comes from another
+season of their career or from covering an adjacent one. Being both out of
+position *and* on the wrong flank does not double up.
 
-| Move | Penalty |
-|---|---|
-| Fullback or winger switching flanks (LB↔RB, LW↔RW) | **−20%** |
-| A midfielder moving one step along the band | **−10%** |
+Who can play where is generous. A player is eligible for:
 
-Midfielders may only move **one step**: DM↔CM, CM↔AM, and an attacking
-midfielder can push out to the wing. So a CM can cover DM or AM, but a DM can
-never play AM. Bench slots cover a whole band and cost nothing.
+- the position they held in the spun season (free),
+- any position they have held in **another season** of their career (−20%),
+- an adjacent role their position can cover (−20%): DM↔CM, CM↔AM, and an
+  attacking midfielder pushing out to the wing. Only **one step** — a CM can
+  cover DM or AM, but a DM can never play AM.
+
+Fullbacks and wingers may always switch flanks, at the same −20%. Bench slots
+cover a whole band and cost nothing.
+
+So Đorđe Mihailović, spun from a season listed at DM, plays DM at full
+strength and his career AM and W roles at −20%. Yuya Kubo, spun as a winger,
+covers five positions — but only the wing for free.
 
 Which flank a player belongs on is taken from **where they actually played** —
 the mean y coordinate of their touches in the event feed (see
 `scripts/build_events.py`). Players who genuinely covered both flanks are
 recorded as two-sided and move freely. 2020 has no event feed, so those
 player-seasons are treated as two-sided.
-
-**A position you've actually played is always free.** If a player has been
-listed at a position in *any* season of their career, they fill that slot at
-full strength — and can reach slots their spun position couldn't. Đorđe
-Mihailović has AM, DM and W seasons, so he plays all three for nothing. The
-same goes for flanks: a fullback with a season on each side switches freely.
-About 71% of players are single-position and 89% of fullbacks and wingers have
-only ever played one flank, so the lock still bites.
 
 Sub slots take D←CB/FB, M←DM/CM/AM, A←W/ST.
 
@@ -153,8 +153,10 @@ already position-adjusted. Goalkeepers use the keeper model (Claiming, Fielding,
 Handling, Passing, Shotstopping, Sweeping), which has a much wider spread than
 outfield g+ — so a great keeper is the single biggest swing in the draft.
 
-Players under 180 minutes in a season are dropped as noise. 2026 is a partial
-season, so those scores are pro-rated to a full 34 games and labelled *projected*.
+Players under **500 minutes** in a season are dropped as noise — g+ over a
+handful of appearances says very little. 2026 is a partial season, so those
+scores are pro-rated to a full 34 games and labelled *projected*; the floor is
+applied to real minutes, before that scaling.
 
 The sim is calibrated against 290 real team-seasons (2013–2025, excluding the
 short 2020 season):
@@ -170,8 +172,12 @@ the strength-to-goals coefficient is tuned so season points from match simulatio
 reproduce that fitted line, and match randomness alone then generates close to
 the observed real-world spread.
 
-Your squad's strength is the sum of the starting XI's scores plus 30% of the
-subs', **after** position penalties.
+Your squad's strength counts **starters at 91%** and **substitutes at 30%** of
+their scores, **after** position penalties — nobody plays every minute.
+
+With that, a flawless draft takes 75 points *and* MLS Cup about 9.8% of the
+time on Easy, 6.8% on Normal and 5.5% on Hard. A realistic drafter manages
+0.4%.
 
 Goals are attributed to players from a positional prior weighted by their real
 goals and assists per 90, so a prolific forward scores like one. It is tuned so
