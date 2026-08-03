@@ -168,6 +168,16 @@ export function fitFor(player, slotPos) {
     || slot.native.includes(player.pos) || slot.off.includes(player.pos);
   if (!eligible) return null;
 
+  // A flank has to have been earned. A player with an established side can
+  // only appear on one they have actually played at some point in their
+  // career -- Kai Wagner has never lined up at right back, so he cannot.
+  // Players who never established a side move freely.
+  const careerSides = player.sides || [];
+  if (slot.flank !== SIDES.NONE && careerSides.length
+      && !careerSides.includes(slot.flank)) {
+    return null;
+  }
+
   // What they actually did in the season they were spun from.
   const samePosition = slot.native.includes(player.pos);
   const sameFlank = slot.flank === SIDES.NONE || !player.side || player.side === slot.flank;

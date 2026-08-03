@@ -84,8 +84,16 @@ Who can play where is generous. A player is eligible for:
   attacking midfielder pushing out to the wing. Only **one step** — a CM can
   cover DM or AM, but a DM can never play AM.
 
-Fullbacks and wingers may always switch flanks, at the same −20%. Bench slots
-cover a whole band and cost nothing.
+**A flank has to be earned.** A fullback or winger can only line up on a side
+they have actually played at some point in their career, and it costs the same
+−20% if it isn't the side they played in the spun season. Kai Wagner has never
+played right back, so he simply can't; Dan Gargan, who spent seasons on both
+flanks, switches at −20%. Players who never established a side move freely.
+
+Bench slots cover a whole band and cost nothing.
+
+Which side someone played comes from the **season mean** of their touch
+y-coordinates, with a deadband around the middle for genuine two-footers.
 
 So Đorđe Mihailović, spun from a season listed at DM, plays DM at full
 strength and his career AM and W roles at −20%. Yuya Kubo, spun as a winger,
@@ -93,9 +101,9 @@ covers five positions — but only the wing for free.
 
 Which flank a player belongs on is taken from **where they actually played** —
 the mean y coordinate of their touches in the event feed (see
-`scripts/build_events.py`). Players who genuinely covered both flanks are
-recorded as two-sided and move freely. 2020 has no event feed, so those
-player-seasons are treated as two-sided.
+`scripts/build_events.py`), per season. A player's career flanks are the union
+across their seasons. 2020 has no event feed, so those player-seasons record no
+side, which leaves them free to play either.
 
 Sub slots take D←CB/FB, M←DM/CM/AM, A←W/ST.
 
