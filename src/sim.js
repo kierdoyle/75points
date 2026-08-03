@@ -175,12 +175,22 @@ export function coachMods(coach, phase) {
 
 const modsFor = (club, phase) => (club && club.mods ? club.mods[phase] : NEUTRAL) || NEUTRAL;
 
-/** Simulate one match. Returns goals for the home and away side. */
+/**
+ * Simulate one match. Returns goals for the home and away side.
+ *
+ * The edge sets how the goals *split* between the two sides; the total stays
+ * at twice the league's measured rate. Scaling each side by exp(+/-edge)
+ * instead would multiply the total by cosh(edge), which is never below 1, so
+ * every mismatch and even the home advantage would quietly inflate scoring --
+ * which suppresses draws and hands out points the real league never awards.
+ */
 export function simMatch(spgHome, spgAway, rng, mHome = NEUTRAL, mAway = NEUTRAL) {
   const edge = (LEAGUE.kStrength * (spgHome - spgAway)) / 2 + LEAGUE.homeLog / 2;
+  const homeShare = 1 / (1 + Math.exp(-2 * edge)); // logistic: e^edge / (e^edge + e^-edge)
+  const total = 2 * LEAGUE.baseGoals;
   // A side's attack lifts its own goals; the opponent's defence suppresses them.
-  const lh = Math.max(MIN_LAMBDA, (LEAGUE.baseGoals * Math.exp(edge) * mHome.atk) / mAway.def);
-  const la = Math.max(MIN_LAMBDA, (LEAGUE.baseGoals * Math.exp(-edge) * mAway.atk) / mHome.def);
+  const lh = Math.max(MIN_LAMBDA, (total * homeShare * mHome.atk) / mAway.def);
+  const la = Math.max(MIN_LAMBDA, (total * (1 - homeShare) * mAway.atk) / mHome.def);
   return { hg: poisson(lh, rng), ag: poisson(la, rng) };
 }
 

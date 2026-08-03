@@ -119,19 +119,28 @@ function draft(strategy, rng, rules = DIFFICULTIES.normal) {
 
 // ------------------------------------------------------- K_STRENGTH tuning
 
+// The real schedule is a spread of opponents, not a parade of average ones.
+// That matters: points are a concave function of the strength gap (you cannot
+// lose by fewer than nothing), so a varied schedule is worth more points than
+// a uniform one. Tuning against spg 0 opponents would leave weak sides
+// systematically overperforming the fitted line.
+const OPP_SPGS = sim.opponents.map((o) => o.spg);
+
 /** Mean season points from match sim for a side of the given per-game edge. */
 function pointsFromMatchSim(spg, k, rng, runs = 400) {
   const pts = [];
+  const pois = (l) => { const L = Math.exp(-l); let n = 0; let q = 1; do { n++; q *= rng(); } while (q > L); return n - 1; };
   for (let r = 0; r < runs; r++) {
     let p = 0;
     for (let g = 0; g < LEAGUE.games; g++) {
       const home = g % 2 === 0;
-      // temporarily swap in the trial k
-      const edge = (k * (home ? spg : -spg)) / 2 + LEAGUE.homeLog / 2;
-      const lh = Math.max(0.2, LEAGUE.baseGoals * Math.exp(edge));
-      const la = Math.max(0.2, LEAGUE.baseGoals * Math.exp(-edge));
-      const pois = (l) => { const L = Math.exp(-l); let n = 0; let q = 1; do { n++; q *= rng(); } while (q > L); return n - 1; };
-      const hg = pois(lh); const ag = pois(la);
+      const opp = OPP_SPGS[Math.floor(rng() * OPP_SPGS.length)];
+      // temporarily swap in the trial k; mirrors simMatch's split model
+      const edge = (k * ((home ? spg : opp) - (home ? opp : spg))) / 2 + LEAGUE.homeLog / 2;
+      const share = 1 / (1 + Math.exp(-2 * edge));
+      const total = 2 * LEAGUE.baseGoals;
+      const hg = pois(Math.max(0.2, total * share));
+      const ag = pois(Math.max(0.2, total * (1 - share)));
       const gf = home ? hg : ag; const ga = home ? ag : hg;
       if (gf > ga) p += 3; else if (gf === ga) p += 1;
     }

@@ -40,11 +40,22 @@ export const DIFFICULTIES = {
   normal: { label: 'Normal', rerolls: 3, maxDPs: MAX_DPS, salaryCap: false, note: '3 DPs' },
   hard: {
     label: 'Hard',
-    rerolls: 0,
+    rerolls: 1,
     maxDPs: MAX_DPS,
     salaryCap: true,
     allocation: ALLOCATION_MONEY,
     note: '3 DPs + salary cap',
+  },
+  // Draft blind: no g+ on the players, no ratings on the coaches, no rerolls.
+  // Everything is revealed once the season kicks off.
+  max: {
+    label: 'Max',
+    rerolls: 0,
+    maxDPs: MAX_DPS,
+    salaryCap: true,
+    allocation: ALLOCATION_MONEY,
+    hideRatings: true,
+    note: 'Ratings hidden',
   },
 };
 
@@ -61,7 +72,8 @@ export function rulesFor(difficulty, league = 'mls') {
     ...base,
     maxDPs: Infinity,
     salaryCap: false,
-    note: base.rerolls === 0 ? 'No rerolls' : `${base.rerolls} rerolls`,
+    note: base.hideRatings ? 'Ratings hidden'
+      : (base.rerolls === 0 ? 'No rerolls' : `${base.rerolls} rerolls`),
   };
 }
 

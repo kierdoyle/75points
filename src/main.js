@@ -6,6 +6,7 @@ import {
   budget, isVersatile, rulesFor,
 } from './rules.js';
 import { achievements } from './achievements.js';
+import { buildCard } from './exportcard.js';
 import { loadPool, makeRng, drawSpin, annotate, pick, currentRosters } from './pool.js';
 import { simSeason, squadStrength, configureLeague, LEAGUE } from './sim.js';
 
@@ -276,6 +277,11 @@ function nextSpin(animate = true) {
   draftScreen(animate);
 }
 
+// Max mode drafts blind. Once the season is under way there is nothing left
+// to protect, so everything is revealed.
+const hidden = () => !!(S.rules && S.rules.hideRatings) && !S.season;
+const gplus = (v) => (v > 0 ? '+' : '') + v.toFixed(2);
+
 const money = (n) => `$${(n / 1e6).toFixed(2)}M`;
 const moneyShort = (n) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n / 1000)}k`);
 
@@ -378,7 +384,7 @@ function playerRow(p) {
           ${p.blocked ? `<span class="pill">${esc(p.blocked)}</span>` : ''}
         </div>
       </div>
-      <div class="sc">${p.score > 0 ? '+' : ''}${p.score.toFixed(2)}<small>g+</small></div>
+      <div class="sc">${hidden() ? '<span class="dim">–</span>' : gplus(p.score)}<small>g+</small></div>
     </button>`;
 }
 
@@ -448,7 +454,7 @@ function chooseSlot(player, options) {
           <div class="cname">${esc(player.name)}</div>
           <div class="dim" style="font-size:11px">
             ${player.pos}${player.side ? ` · ${SIDE_LABEL[player.side] === 'L' ? 'left' : 'right'}` : ''}
-            · ${player.score > 0 ? '+' : ''}${player.score.toFixed(2)} g+
+            ${hidden() ? '' : `· ${gplus(player.score)} g+`}
             ${S.rules.salaryCap ? ` · ${moneyShort(player.salary)}` : ''}
           </div>
           ${isVersatile(player) ? `<div class="dim" style="font-size:10.5px;margin-top:2px">Has played ${esc(player.positions.join(', '))}</div>` : ''}
@@ -460,7 +466,7 @@ function chooseSlot(player, options) {
           <button class="opt slotopt" data-slot="${o.slot.id}">
             <b>${SLOT_LABEL[o.slot.pos]}</b>
             <span>${o.penalty ? `−${(o.penalty * 100).toFixed(0)}%` : (o.slot.starter ? 'Natural' : 'Bench')}</span>
-            <i>${effectiveScore(player, o.slot.pos) > 0 ? '+' : ''}${effectiveScore(player, o.slot.pos).toFixed(2)}</i>
+            <i>${hidden() ? '&nbsp;' : gplus(effectiveScore(player, o.slot.pos))}</i>
           </button>`).join('')}
       </div>
       ${options.some((o) => o.penalty) ? `<p class="dim" style="font-size:11px;margin-top:10px">
@@ -503,9 +509,9 @@ function coachCard(c, selectable) {
   const bar = (label, v) => `
     <div class="crow">
       <span class="clab">${label}</span>
-      <span class="cbar"><i style="width:${Math.max(3, v * 100)}%;
-        background:${v >= 0.5 ? 'var(--accent)' : 'var(--red)'}"></i></span>
-      <b class="mono ${v >= 0.5 ? 'up' : 'down'}">${Math.round(v * 100)}</b>
+      <span class="cbar"><i style="width:${hidden() ? 100 : Math.max(3, v * 100)}%;
+        background:${hidden() ? 'var(--line)' : (v >= 0.5 ? 'var(--accent)' : 'var(--red)')}"></i></span>
+      <b class="mono ${v >= 0.5 ? 'up' : 'down'}">${hidden() ? '?' : Math.round(v * 100)}</b>
     </div>`;
   return `
     <${selectable ? 'button' : 'div'} class="coach" ${selectable ? `data-coach="${c.id}"` : ''}>
@@ -589,7 +595,7 @@ function squadPane(interactive = false) {
     : 'Tap two players to swap their positions'}</p>` : ''}
     <div class="between card" style="margin-top:10px">
       <div><div class="eyebrow">Squad g+</div>
-        <b class="mono" style="font-size:19px">${total > 0 ? '+' : ''}${total.toFixed(1)}</b></div>
+        <b class="mono" style="font-size:19px">${hidden() ? '–' : (total > 0 ? '+' : '') + total.toFixed(1)}</b></div>
       <div class="dim" style="font-size:12px;text-align:right">${S.formation} · ${filled}/${SQUAD_SIZE} filled<br>
         Starters 91% · subs 30% · after penalties</div>
     </div>`;
@@ -604,6 +610,9 @@ function pitchSlot(s, bench, interactive, from, targets) {
   const p = s.player;
   const fit = fitFor(p, s.pos);
   const pen = fit && fit.penalty ? `<span class="pen">−${(fit.penalty * 100).toFixed(0)}%</span>` : '';
+  const eff = effectiveScore(p, s.pos);
+  const tip = hidden() ? `${p.name} · ${p.season}`
+    : `${p.name} · ${p.season} · ${gplus(eff)} g+`;
   const cls = [
     'slot',
     s.justFilled ? 'filling' : '',
@@ -612,17 +621,31 @@ function pitchSlot(s, bench, interactive, from, targets) {
     from && targets.has(s.id) ? 'target' : '',
     from && from.id !== s.id && !targets.has(s.id) ? 'faded' : '',
   ].filter(Boolean).join(' ');
-  return `<div class="${cls}" ${style} data-slot="${s.id}">
+  return `<div class="${cls}" ${style} data-slot="${s.id}" title="${esc(tip)}">
     ${avatar(HEAD(p.id), initials(p.name), 'head round')}
     <div class="lbl">${SLOT_LABEL[s.pos]}${pen}</div>
     <div class="nm2 ${nameSize(shortName(p.name))}">${esc(shortName(p.name))}</div>
+    <div class="yr">${p.season}${hidden() ? '' : ` · ${gplus(eff)}`}</div>
   </div>`;
+}
+
+/** A tap on any filled slot reports the player, their season and their value. */
+function playerTip(slot) {
+  const p = slot.player;
+  if (!p) return;
+  const eff = effectiveScore(p, slot.pos);
+  toast(hidden() ? `${shortName(p.name)} · ${p.season}`
+    : `${shortName(p.name)} · ${p.season} · ${gplus(eff)} g+`);
 }
 
 /** Tap one player then another to swap them, when both can play the other's slot. */
 function bindSwap(rerender) {
+  on('.slot[data-slot]:not(.tappable)', 'click', (e) => {
+    playerTip(S.squad.find((x) => x.id === e.currentTarget.dataset.slot));
+  });
   on('.slot.tappable[data-slot]', 'click', (e) => {
     const id = e.currentTarget.dataset.slot;
+    playerTip(S.squad.find((x) => x.id === id));
     if (!S.swapFrom) { S.swapFrom = id; rerender(); return; }
     if (S.swapFrom === id) { S.swapFrom = null; rerender(); return; }
     const a = S.squad.find((s) => s.id === S.swapFrom);
@@ -657,7 +680,7 @@ function drawReview() {
       <div><div class="eyebrow">Squad complete</div>
         <h2 style="font-size:20px">${esc(S.teamName)}</h2></div>
       <div style="text-align:right"><div class="eyebrow">Projected</div>
-        <b class="mono" style="font-size:17px">${(projected * LEAGUE.games).toFixed(0)} pts</b></div>
+        <b class="mono" style="font-size:17px">${hidden() ? '–' : `${(projected * LEAGUE.games).toFixed(0)} pts`}</b></div>
     </div>
     ${S.rules.salaryCap ? capBar() : ''}
     <div id="pane">${squadPane(true)}</div>
@@ -985,12 +1008,13 @@ function endScreen() {
     ${achievementsCard(r)}
     ${awardsCard(r.awards, 'Regular-season leaders')}
     ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}
-    <div style="margin-top:12px">${squadPane(false)}</div>
+    <div style="margin-top:12px" id="finalsquad">${squadPane(false)}</div>
 
     <div class="card" style="margin-top:12px">
       <div class="eyebrow" style="margin-bottom:8px">Share</div>
       <div class="share">${esc(shareText())}</div>
       <button class="btn sm" id="copy" style="width:100%;margin-top:12px">Copy result</button>
+      <button class="btn ghost sm" id="png" style="width:100%;margin-top:8px">⬇ Export as PNG</button>
     </div>
     <button class="btn ghost" id="again" style="margin-top:12px">Play again</button>`);
 
@@ -1009,7 +1033,39 @@ function endScreen() {
       toast('Copied!');
     }
   });
+  on('#png', 'click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = 'Rendering…';
+    try {
+      const blob = await buildCard({
+        season: r,
+        squad: S.squad,
+        teamName: S.teamName,
+        difficulty: DIFFICULTIES[S.difficulty].label,
+        coach: S.coach,
+        achievements: S.achievements || [],
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `road-to-${LEAGUE.target}-${S.teamName.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      toast('Saved');
+    } catch (err) {
+      toast('Export failed');
+    }
+    btn.disabled = false;
+    btn.textContent = was;
+  });
   on('#again', 'click', setupScreen);
+  on('#finalsquad .slot[data-slot]', 'click', (e) => {
+    playerTip(S.squad.find((x) => x.id === e.currentTarget.dataset.slot));
+  });
 }
 
 /** Which half of the target was missed, in plain words. */

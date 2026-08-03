@@ -275,6 +275,12 @@ button.coach:active { transform: scale(.99); border-color: var(--accent); }
      words shrink instead (see the .long / .xlong sizes below). */
   overflow: hidden; overflow-wrap: normal; word-break: normal;
 }
+.slot .yr {
+  font-size: 8.5px; font-weight: 700; line-height: 1.1; margin-top: 1px;
+  color: rgba(255,255,255,.82); text-shadow: 0 1px 3px rgba(0,0,0,.75);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.bench .slot .yr { color: var(--dim); text-shadow: none; }
 .slot .nm2.long { font-size: 9px; letter-spacing: -.01em; }
 .slot .nm2.xlong { font-size: 8px; letter-spacing: -.02em; }
 .slot.empty .avatar { background: rgba(255,255,255,.07); border-style: dashed; }

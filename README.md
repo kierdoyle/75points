@@ -29,19 +29,22 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
 1. **Setup** — pick a league, a difficulty, one of five formations, and (in MLS)
    the conference your club joins.
 
-   | | Rerolls | DPs | Salary cap |
-   |---|---|---|---|
-   | Easy | 5 | unlimited | — |
-   | Normal | 3 | 3 | — |
-   | Hard | **none** | 3 | yes |
+   | | Rerolls | DPs | Salary cap | Ratings |
+   |---|---|---|---|---|
+   | Easy | 5 | unlimited | — | shown |
+   | Normal | 3 | 3 | — | shown |
+   | Hard | 1 | 3 | yes | shown |
+   | **Max** | none | 3 | yes | **hidden** |
+
+   Max drafts blind: no g+ on the players, no percentile on the coaches, no
+   projected points. Everything is revealed the moment the season kicks off.
 
    There is no public NWSL salary data, so that league has no Designated
    Players and no cap — its difficulties differ **only** in rerolls.
 
    Rerolls turn out to be the strongest difficulty lever by some distance —
    each one is worth about a point of final table position, more than the
-   entire salary cap contributes. Measured with a drafter that actually spends
-   them: 5 rerolls → 74 points median, 3 → 73, none → 70.
+   entire salary cap contributes.
 2. **Draft** — each spin lands on a random (team, season) pair drawn from every MLS
    team-season 2013–2026. Take exactly one player from that roster into an open
    slot. 11 starters + 3 subs (one defender, one midfielder, one attacker).
@@ -96,6 +99,19 @@ calibration fit, its own scoring environment (MLS averages 1.46 goals per team
 per game with a +0.52 home edge; the NWSL 1.32 and +0.27), its own tuned
 strength coefficient, and its own single-season records driving the
 achievements.
+
+## Squad screen
+
+Each player shows the season they were spun from and their effective g+ after
+penalties. Tap (or hover) any of them for the full name, season and value.
+
+## Export
+
+The end screen renders the whole season to a PNG — squad with seasons and
+values, coach, achievements, leaders and a result strip. It is drawn on a
+canvas rather than captured from the page: the ASA image buckets send no
+`Access-Control-Allow-Origin` header, so a badge or headshot painted onto a
+canvas would taint it and make the export throw.
 
 ## Achievements
 

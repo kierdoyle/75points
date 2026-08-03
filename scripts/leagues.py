@@ -21,7 +21,7 @@ LEAGUES = {
         "season_games": 34,
         # Tuned by `npm run sanity -- tune` so season points from match sim
         # reproduce the fitted line.
-        "k_strength": 0.765,
+        "k_strength": 0.795,
         "target_points": 75,
         "min_minutes": 500,
         "coach_min_games": 30,
@@ -46,7 +46,7 @@ LEAGUES = {
         "current_season": "2026",
         # 16 clubs from 2026, so a full double round-robin is 30 games.
         "season_games": 30,
-        "k_strength": 0.710,
+        "k_strength": 0.680,
         # Kansas City's record 65 points came in a 26-game season (2.50 ppg),
         # which over this 30-game one is exactly a 75-point pace.
         "target_points": 75,
