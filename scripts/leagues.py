@@ -24,6 +24,7 @@ LEAGUES = {
         "k_strength": 0.765,
         "target_points": 75,
         "min_minutes": 500,
+        "coach_min_games": 30,
         "events_pattern": "{season}MLS_events.csv",
         "salaries": True,
         "conferences": True,
@@ -46,11 +47,12 @@ LEAGUES = {
         # 16 clubs from 2026, so a full double round-robin is 30 games.
         "season_games": 30,
         "k_strength": 0.710,
-        # Kansas City's record 65 points came in a 26-game season (2.50 ppg).
-        # Scaled to this 30-game one that pace is 75; the target sits just
-        # under it.
-        "target_points": 72,
+        # Kansas City's record 65 points came in a 26-game season (2.50 ppg),
+        # which over this 30-game one is exactly a 75-point pace.
+        "target_points": 75,
         "min_minutes": 250,
+        # Shorter seasons, so a lower bar for trusting a coach's percentiles.
+        "coach_min_games": 20,
         "events_pattern": "{season}NWSL_events.csv",
         "salaries": False,
         "conferences": False,

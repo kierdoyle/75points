@@ -2,9 +2,13 @@
 
 **Live:** https://mls-road-to-75.netlify.app
 
-Two leagues: **MLS** (75 points) and the **NWSL** (72). Pick one on the setup
-screen; each ships its own player pool, coaches, calibration and playoff
-format.
+Two leagues, both chasing **75 points**. Pick one on the setup screen; each
+ships its own player pool, coaches, calibration and playoff format.
+
+Styled in [American Soccer Analysis](https://www.americansocceranalysis.com/)
+livery — their blue (`#20b0e0`) and red (`#c02030`), sampled from the ASA
+banner. Every rating in the game comes from ASA's data. This is a fan project,
+not an ASA product.
 
 > Currently private — the "75 Points" Netlify team has team-wide site protection
 > on, so the URL asks for a Netlify sign-in. To open it up to everyone, set
@@ -48,7 +52,8 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
 
 ### Head coaches
 
-Every coach with 30+ league games is rated on two career percentile ranks,
+Every coach with enough league games — 30 in MLS, 20 in the NWSL's shorter
+seasons — is rated on two career percentile ranks,
 shown as a plain 0–100: **attack** is their average rank for expected goals
 for, **defence** for expected goals against. Those swing the team's goals
 scored and conceded by up to 2.5% either way, and a median (50th percentile)
@@ -75,13 +80,16 @@ small enough not to distort the target.
 | Seasons in the pool | 2013–2026 | 2016–2026 |
 | Minutes floor | 500 | 250 |
 | Season | 34 games, two conferences | 30 games, single table |
-| Target | 75 points | 72 points |
+| Target | 75 points | 75 points |
 | Playoffs | top 8 **per conference**, best-of-3 round one, then knockout | top 8 **overall**, straight knockout |
 | Designated Players / cap | yes | no |
 
-The NWSL's points record is Kansas City's 65, but that came in a 26-game
-season — 2.50 points a game, which over this 30-game one is a pace of 75. The
-72-point target sits just under that.
+Both leagues target 75. In the NWSL that is a genuinely steeper ask: Kansas
+City's record 65 points came in a 26-game season, a 2.50-per-game pace, and 75
+over 30 games is exactly that pace again — where MLS's 75 over 34 is 2.21. A
+flawless draft takes 75 and the trophy about **9.8%** of the time in MLS on
+normal, against **1.8%** in the NWSL. Around 70 would put the two on equal
+footing if that asymmetry ever grates.
 
 Everything else is measured per league rather than shared: each has its own
 calibration fit, its own scoring environment (MLS averages 1.46 goals per team

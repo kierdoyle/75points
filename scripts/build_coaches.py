@@ -26,8 +26,7 @@ from leagues import LEAGUES, cache_name
 
 CACHE = os.path.join(os.path.dirname(__file__), ".cache")
 
-# A coach needs this many league games before we trust their percentiles.
-MIN_GAMES = 30
+
 
 
 LEAGUE = sys.argv[1] if len(sys.argv) > 1 else "mls"
@@ -36,6 +35,8 @@ SEASONS = CFG["seasons"]
 # The current season is still being played, so it has no trophies to award.
 COMPLETED = [s for s in SEASONS
              if s != CFG["current_season"] and s not in CFG["skip_trophies"]]
+# A coach needs this many league games before we trust their percentiles.
+MIN_GAMES = CFG["coach_min_games"]
 
 
 def load(stem):

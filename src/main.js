@@ -15,6 +15,11 @@ const app = document.getElementById('app');
 // fallback for the occasional 404 (see avatar()/setAvatar()).
 const BADGE = (id) => `https://american-soccer-analysis-headshots.s3.amazonaws.com/club_logos/${id}.png`;
 const HEAD = (id) => `https://american-soccer-analysis-headshots.s3.us-east-1.amazonaws.com/player_headshots/${id}.png`;
+// American Soccer Analysis: the source of every rating in the game, and the
+// livery it borrows. Hotlinked like the badges and headshots.
+const ASA_SITE = 'https://www.americansocceranalysis.com/';
+const ASA_LOGO = 'https://images.squarespace-cdn.com/content/v1/5352fb7ce4b0bf79997bfc81/1435180609079-51SLX979FJ44N8A4R9PG/banner-03.png?format=750w';
+const ASA_CREST = 'https://images.squarespace-cdn.com/content/v1/5352fb7ce4b0bf79997bfc81/1519766680781-9RQ0CQXJH5H4JBRNBBQ3/asa-logo.png?format=300w';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -157,6 +162,8 @@ async function boot() {
 function setupScreen() {
   render(`
     <div class="hero">
+      <img class="asa-mark" src="${ASA_LOGO}" alt="American Soccer Analysis"
+           onerror="this.style.display='none'" />
       <div class="badge-75">${LEAGUE.target}</div>
       <h1>Road to ${LEAGUE.target}</h1>
       <p>${LEAGUES[S.league].blurb}. Draft 14 players. Then win
@@ -216,6 +223,11 @@ function setupScreen() {
         Players are rated by their real g+ above average that season, and locked to the
         flank they actually played. Playing them elsewhere costs you.
       </p>
+      <a class="asa-credit dim" href="${ASA_SITE}" target="_blank" rel="noopener noreferrer"
+         style="font-size:11.5px;text-decoration:none;margin-top:2px">
+        <img src="${ASA_CREST}" alt="" onerror="this.style.display='none'" />
+        <span>Data &amp; livery from American Soccer Analysis</span>
+      </a>
     </div>`);
 
   on('[data-group] .opt', 'click', async (e) => {
