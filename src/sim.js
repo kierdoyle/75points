@@ -118,11 +118,41 @@ function poisson(lambda, rng) {
   return k - 1;
 }
 
+// ---------------------------------------------------------------- coaches
+
+// A coach's percentile ranks swing the team by up to a tenth either way; a
+// median (50th percentile) coach changes nothing, which keeps the league
+// calibration intact since a randomly drawn coach averages out to neutral.
+export const COACH_SWING = 0.20;      // 1 + 0.20 * (pct - 0.5)  =>  0.9 .. 1.1
+export const TROPHY_BONUS = 0.05;     // Shield in the league, Cup in the playoffs
+
+const NEUTRAL = { atk: 1, def: 1 };
+
+/**
+ * A coach's multipliers for one phase of the season.
+ * `atk` scales the goals the team scores, `def` divides the goals it concedes.
+ */
+export function coachMods(coach, phase) {
+  if (!coach) return NEUTRAL;
+  let atk = 1 + COACH_SWING * (coach.off - 0.5);
+  let def = 1 + COACH_SWING * (coach.def - 0.5);
+  const bonus = (phase === 'playoffs' && coach.cups > 0)
+    || (phase === 'regular' && coach.shields > 0);
+  if (bonus) {
+    atk *= 1 + TROPHY_BONUS;
+    def *= 1 + TROPHY_BONUS;
+  }
+  return { atk, def };
+}
+
+const modsFor = (club, phase) => (club && club.mods ? club.mods[phase] : NEUTRAL) || NEUTRAL;
+
 /** Simulate one match. Returns goals for the home and away side. */
-export function simMatch(spgHome, spgAway, rng) {
+export function simMatch(spgHome, spgAway, rng, mHome = NEUTRAL, mAway = NEUTRAL) {
   const edge = (K_STRENGTH * (spgHome - spgAway)) / 2 + HOME_LOG / 2;
-  const lh = Math.max(MIN_LAMBDA, BASE_GOALS * Math.exp(edge));
-  const la = Math.max(MIN_LAMBDA, BASE_GOALS * Math.exp(-edge));
+  // A side's attack lifts its own goals; the opponent's defence suppresses them.
+  const lh = Math.max(MIN_LAMBDA, (BASE_GOALS * Math.exp(edge) * mHome.atk) / mAway.def);
+  const la = Math.max(MIN_LAMBDA, (BASE_GOALS * Math.exp(-edge) * mAway.atk) / mHome.def);
   return { hg: poisson(lh, rng), ag: poisson(la, rng) };
 }
 
@@ -181,11 +211,12 @@ export function simRegularSeason(userClub, opponents, conference, rng, ctx = {})
   const { squadPool, oppPools = {}, tally } = ctx;
 
   const fixtures = buildSchedule(clubs, conference, rng);
+  const userMods = modsFor(userClub, 'regular');
   const results = [];
   for (const f of fixtures) {
     const { hg, ag } = f.home
-      ? simMatch(userClub.spg, f.opp.spg, rng)
-      : simMatch(f.opp.spg, userClub.spg, rng);
+      ? simMatch(userClub.spg, f.opp.spg, rng, userMods, NEUTRAL)
+      : simMatch(f.opp.spg, userClub.spg, rng, NEUTRAL, userMods);
     const gf = f.home ? hg : ag;
     const ga = f.home ? ag : hg;
     applyResult(userRec, gf, ga);
@@ -239,9 +270,11 @@ function bestOfThree(high, low, rng, ctx = {}) {
   let hw = 0; let lw = 0; const games = [];
   for (let g = 0; g < 3 && hw < 2 && lw < 2; g++) {
     const highHosts = g !== 1; // higher seed hosts games 1 and 3
+    const mh = modsFor(high, 'playoffs');
+    const ml = modsFor(low, 'playoffs');
     const { hg, ag } = highHosts
-      ? simMatch(high.spg, low.spg, rng)
-      : simMatch(low.spg, high.spg, rng);
+      ? simMatch(high.spg, low.spg, rng, mh, ml)
+      : simMatch(low.spg, high.spg, rng, ml, mh);
     const highGoals = highHosts ? hg : ag;
     const lowGoals = highHosts ? ag : hg;
     let winner;
@@ -266,7 +299,8 @@ function bestOfThree(high, low, rng, ctx = {}) {
 /** Single-elimination tie hosted by the better seed; draw => shootout. */
 function knockout(a, b, rng, ctx = {}) {
   const [host, away] = a.seed <= b.seed ? [a, b] : [b, a];
-  const { hg, ag } = simMatch(host.spg, away.spg, rng);
+  const { hg, ag } = simMatch(host.spg, away.spg, rng,
+    modsFor(host, 'playoffs'), modsFor(away, 'playoffs'));
   let winner; let pens = false;
   if (hg === ag) {
     pens = true;
@@ -334,11 +368,12 @@ function leaderboard(tally, key) {
  * Goals and assists are tallied for the player's own squad across both the
  * regular season and the playoff run.
  */
-export function simSeason({ squad, opponents, conference, teamName, rng, rosters = {} }) {
+export function simSeason({ squad, opponents, conference, teamName, rng, rosters = {}, coach = null }) {
   const { total, spg } = squadStrength(squad);
   const userClub = {
     id: '__user__', abbr: 'YOU', name: teamName || 'Your Club',
     short: teamName || 'Your Club', conf: conference, spg, isUser: true,
+    mods: { regular: coachMods(coach, 'regular'), playoffs: coachMods(coach, 'playoffs') },
   };
 
   const tally = {};
@@ -362,6 +397,7 @@ export function simSeason({ squad, opponents, conference, teamName, rng, rosters
   return {
     strength: total,
     spg,
+    coach,
     ...season,
     seed: userRow.seed,
     madePlayoffs,

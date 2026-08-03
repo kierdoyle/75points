@@ -158,6 +158,11 @@ def main():
     players = load("players")
     teams = load("teams")
     events = load_events()
+    coach_path = os.path.join(CACHE, "coaches.json")
+    if not os.path.exists(coach_path):
+        raise SystemExit("missing coaches.json -- run scripts/build_coaches.py first")
+    with open(coach_path) as f:
+        coaches = json.load(f)
 
     name_by_id = dict(zip(players["player_id"], players["player_name"]))
     team_rows = {
@@ -170,6 +175,27 @@ def main():
     }
 
     gp_by_season, pts_by_season = team_games_played()
+
+    # ---- career positions and flanks --------------------------------------
+    # A player who has ever been listed at a position plays it at full
+    # strength, so a utility man like Dorde Mihailovic (AM, DM and W seasons)
+    # covers all three for free. Positions come from every listed season
+    # regardless of minutes; a flank only counts once there were enough
+    # touches to establish one.
+    career_pos = {}
+    career_side = {}
+    for season in SEASONS:
+        ev_season = events.get(season, {})
+        for df, forced in ((load(f"pg_{season}"), None), (load(f"gk_{season}"), "GK")):
+            for _, r in df.iterrows():
+                pos = forced or r["general_position"]
+                if pos not in POS_IDX:
+                    continue
+                pid = r["player_id"]
+                career_pos[pid] = career_pos.get(pid, 0) | (1 << POS_IDX[pos])
+                side = side_of(pos, ev_season.get(name_by_id.get(pid, "")))
+                if side:
+                    career_side[pid] = career_side.get(pid, 0) | (1 << (side - 1))
 
     # ---- per-season player rows -------------------------------------------
     # rows: season -> team_id -> list of player dicts
@@ -337,6 +363,9 @@ def main():
         "currentSeason": CURRENT_SEASON,
         "teams": {t: team_rows[t] for t in {s["t"] for s in spins}},
         "names": {p: name_by_id.get(p, "Unknown") for p in used_players},
+        # (position bitmask << 2) | flank bitmask, over the player's whole career
+        "careers": {p: (career_pos.get(p, 0) << 2) | career_side.get(p, 0)
+                    for p in used_players},
         "spins": spins,
     }
     with open(os.path.join(OUT, "pool.json"), "w") as f:
@@ -347,6 +376,7 @@ def main():
                   "sigma": round(sigma, 5)},
         "games": FULL_SEASON_GAMES,
         "opponents": opponents,
+        "coaches": coaches,
     }
     with open(os.path.join(OUT, "sim.json"), "w") as f:
         json.dump(sim_json, f, separators=(",", ":"))

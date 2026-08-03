@@ -135,6 +135,12 @@ function runBatch(strategy, runs, seed0) {
   for (let i = 0; i < runs; i++) {
     const rng = makeRng(seed0 + i);
     const { squad, dead } = draft(strategy, rng);
+    // Players are offered three coaches; the greedy bot takes the best of them,
+    // the others take one at random.
+    const shortlist = [0, 1, 2].map(() => sim.coaches[Math.floor(rng() * sim.coaches.length)]);
+    const coach = strategy === 'greedy'
+      ? shortlist.sort((x, y) => (y.off + y.def) - (x.off + x.def))[0]
+      : shortlist[0];
     const res = simSeason({
       squad,
       opponents: sim.opponents,
@@ -142,6 +148,7 @@ function runBatch(strategy, runs, seed0) {
       teamName: 'Test FC',
       rng,
       rosters,
+      coach,
     });
     const scorer = res.awards.scorers[0];
     const assister = res.awards.assisters[0];

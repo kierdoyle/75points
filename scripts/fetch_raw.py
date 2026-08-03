@@ -26,9 +26,10 @@ def main():
         n = len(obj) if hasattr(obj, "__len__") else "?"
         print(f"  wrote {name}.pkl ({n} rows)")
 
-    print("players / teams")
+    print("players / teams / managers")
     dump("players", asa.get_players(leagues="mls"))
     dump("teams", asa.get_teams(leagues="mls"))
+    dump("managers", asa.get_managers(leagues="mls"))
 
     for season in SEASONS:
         print(f"season {season}")
@@ -36,6 +37,7 @@ def main():
         dump(f"gk_{season}", asa.get_goalkeeper_goals_added(leagues="mls", season_name=season))
         dump(f"sal_{season}", asa.get_player_salaries(leagues="mls", season_name=season))
         dump(f"games_{season}", asa.get_games(leagues="mls", season_name=season))
+        dump(f"txg_{season}", asa.get_team_xgoals(leagues="mls", season_name=season))
 
     print("done")
 

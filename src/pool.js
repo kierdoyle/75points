@@ -21,6 +21,17 @@ export const pick = (arr, rng) => arr[Math.floor(rng() * arr.length)];
  */
 export function loadPool(raw) {
   const { positions, names, teams, currentSeason } = raw;
+  const careers = raw.careers || {};
+  // careers[id] packs (position bitmask << 2) | flank bitmask.
+  const careerPos = (id) => {
+    const bits = (careers[id] || 0) >> 2;
+    return positions.filter((_, i) => bits & (1 << i));
+  };
+  const careerSides = (id) => {
+    const bits = (careers[id] || 0) & 3;
+    return [1, 2].filter((s) => bits & (1 << (s - 1)));
+  };
+
   const spins = raw.spins.map((s) => ({
     teamId: s.t,
     season: s.s,
@@ -36,6 +47,8 @@ export function loadPool(raw) {
       side: p[5],   // 0 both/unknown, 1 left, 2 right
       g90: p[6],
       a90: p[7],
+      positions: careerPos(p[0]),
+      sides: careerSides(p[0]),
       teamId: s.t,
       season: s.s,
       projected: s.s === currentSeason,

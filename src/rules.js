@@ -116,12 +116,21 @@ export function makeSquad(formation) {
 /**
  * What it costs to play this player in this slot, or null if they can't.
  * Returns { penalty, reasons } where penalty is the fraction of g+ lost.
+ *
+ * A position the player has held in any season of their career counts as
+ * native, so a utility man who has a W season and an AM season plays both for
+ * free -- and can even fill a slot his spun position couldn't reach. The same
+ * applies to flanks: a fullback who has spent a season on each side switches
+ * without penalty.
  */
 export function fitFor(player, slotPos) {
   const slot = SLOTS[slotPos];
   if (!slot) return null;
-  const native = slot.native.includes(player.pos);
-  const off = slot.off.includes(player.pos);
+
+  const careerPos = player.positions && player.positions.length
+    ? player.positions : [player.pos];
+  const native = careerPos.some((p) => slot.native.includes(p));
+  const off = !native && careerPos.some((p) => slot.off.includes(p));
   if (!native && !off) return null;
 
   const reasons = [];
@@ -131,10 +140,12 @@ export function fitFor(player, slotPos) {
     reasons.push('Out of position');
   }
   // Only a player with a known flank pays for switching, and only when the
-  // slot itself has a flank. Players who genuinely covered both sides are
-  // recorded with no side and move freely.
+  // slot itself has a flank. Anyone who covered both sides -- in the spun
+  // season or anywhere in their career -- moves freely.
+  const careerSides = player.sides && player.sides.length
+    ? player.sides : (player.side ? [player.side] : []);
   if (slot.flank !== SIDES.NONE && native
-      && player.side && player.side !== slot.flank) {
+      && careerSides.length && !careerSides.includes(slot.flank)) {
     penalty += SIDE_SWAP_PENALTY;
     reasons.push('Wrong flank');
   }

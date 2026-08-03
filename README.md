@@ -24,8 +24,32 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
    team-season 2013–2026. Take exactly one player from that roster into an open
    slot. 11 starters + 3 subs (one defender, one midfielder, one attacker).
    Picks are permanent — cursed picks are the point.
-3. **Season** — your squad joins the 2026 league as an expansion side, plays 34
+3. **Head coach** — pick one of three names off the touchline.
+4. **Season** — your squad joins the 2026 league as an expansion side, plays 34
    games against the real current clubs, then the MLS Cup Playoffs.
+
+### Head coaches
+
+Every coach with 30+ league games is rated on two career percentile ranks:
+**attack** is their average rank for expected goals for, **defence** for
+expected goals against. Those swing the team's goals scored and conceded by up
+to a tenth either way, and a median (50th percentile) coach changes nothing —
+which keeps the league calibration intact, since a random coach averages out
+neutral.
+
+| Badge | Earned by | Effect |
+|---|---|---|
+| 🏆 **Playoff Proven** | Won MLS Cup | +5% in the playoffs |
+| 🛡 **Proven Winner** | Won the Supporters' Shield | +5% in the regular season |
+
+Trophies are read straight out of the games table — the MLS Cup winner is the
+last knockout game of each completed season, the Shield the best regular-season
+record — and all 13 of each since 2013 match the record books.
+
+Note that the coach is a net buff: choosing the best of three skews the draw
+above the median, and the trophy bonuses only ever add. A perfect draft's odds
+of taking 75 points *and* the Cup go from about 6% with no coach to 12% with
+the best of three.
 
 ### Draft rules
 
@@ -47,6 +71,14 @@ the mean y coordinate of their touches in the event feed (see
 `scripts/build_events.py`). Players who genuinely covered both flanks are
 recorded as two-sided and move freely. 2020 has no event feed, so those
 player-seasons are treated as two-sided.
+
+**A position you've actually played is always free.** If a player has been
+listed at a position in *any* season of their career, they fill that slot at
+full strength — and can reach slots their spun position couldn't. Đorđe
+Mihailović has AM, DM and W seasons, so he plays all three for nothing. The
+same goes for flanks: a fullback with a season on each side switches freely.
+About 71% of players are single-position and 89% of fullbacks and wingers have
+only ever played one flank, so the lock still bites.
 
 Sub slots take D←CB/FB, M←DM/CM/AM, A←W/ST.
 
@@ -114,9 +146,10 @@ deploy previews and build statuses reported back on the PR.
 Rebuilding the data (needs the ASA client — `pip install itscalledsoccer pandas`):
 
 ```bash
-python scripts/fetch_raw.py     # caches the ASA API responses to scripts/.cache/
-python scripts/build_events.py  # summarises the MLS event CSVs (sides, goals, assists)
-python scripts/build_data.py    # writes public/data/{pool,sim}.json
+python scripts/fetch_raw.py      # caches the ASA API responses to scripts/.cache/
+python scripts/build_events.py   # summarises the MLS event CSVs (sides, goals, assists)
+python scripts/build_coaches.py  # rates head coaches and finds their trophies
+python scripts/build_data.py     # writes public/data/{pool,sim}.json
 ```
 
 `build_events.py` reads the season event CSVs (`{year}MLS_events.csv`), which

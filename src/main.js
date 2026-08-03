@@ -195,6 +195,7 @@ const shape = (f) => ({
 function startDraft() {
   S.rng = makeRng((Math.random() * 2 ** 32) >>> 0);
   S.squad = makeSquad(S.formation);
+  S.coach = null;
   S.picked = new Set();
   S.rerolls = DIFFICULTIES[S.difficulty].rerolls;
   S.tab = 'spin';
@@ -378,9 +379,71 @@ async function commitPick(player, slot) {
   await wait(950);
   slot.justFilled = false;
 
-  if (S.squad.every((s) => s.player)) { reviewScreen(); return; }
+  if (S.squad.every((s) => s.player)) { coachScreen(); return; }
   S.tab = 'spin';
   nextSpin();
+}
+
+// ---------------------------------------------------------------- coach
+
+const pct = (v) => `${Math.round(v * 100)}`;
+const swing = (v) => {
+  const p = (v - 0.5) * 20; // COACH_SWING, as a percentage
+  return `${p >= 0 ? '+' : ''}${p.toFixed(1)}%`;
+};
+
+function coachCard(c, selectable) {
+  const bar = (label, v) => `
+    <div class="crow">
+      <span class="clab">${label}</span>
+      <span class="cbar"><i style="width:${Math.max(3, v * 100)}%;
+        background:${v >= 0.5 ? 'var(--accent)' : 'var(--red)'}"></i></span>
+      <b class="mono ${v >= 0.5 ? 'up' : 'down'}">${swing(v)}</b>
+    </div>`;
+  return `
+    <${selectable ? 'button' : 'div'} class="coach" ${selectable ? `data-coach="${c.id}"` : ''}>
+      <div class="chead">
+        ${avatar(BADGE(c.club), c.abbr)}
+        <div style="min-width:0">
+          <div class="cname">${esc(c.name)}</div>
+          <div class="dim" style="font-size:11px">${esc(c.abbr)} · ${c.span} · ${c.games} games</div>
+        </div>
+      </div>
+      ${bar('ATT', c.off)}
+      ${bar('DEF', c.def)}
+      ${(c.cups || c.shields) ? `<div class="cbadges">
+        ${c.cups ? '<span class="pill gold">🏆 Playoff Proven</span>' : ''}
+        ${c.shields ? '<span class="pill shield">🛡 Proven Winner</span>' : ''}
+      </div>` : ''}
+    </${selectable ? 'button' : 'div'}>`;
+}
+
+function coachScreen() {
+  // Three names off the touchline; take one.
+  const all = [...S.sim.coaches];
+  const picks = [];
+  while (picks.length < 3 && all.length) {
+    picks.push(all.splice(Math.floor(S.rng() * all.length), 1)[0]);
+  }
+  S.coachOptions = picks;
+
+  render(`
+    <div style="margin-bottom:12px">
+      <div class="eyebrow">Squad complete</div>
+      <h2 style="font-size:20px">Appoint a head coach</h2>
+      <p class="muted" style="font-size:13px;margin-top:6px">
+        Ratings are career percentile ranks for expected goals for and against.
+        A median coach changes nothing; the best and worst swing your attack and
+        defence by a tenth.</p>
+    </div>
+    <div class="coaches">${picks.map((c) => coachCard(c, true)).join('')}</div>
+    <p class="dim center" style="font-size:11.5px;margin-top:10px">
+      🏆 an MLS Cup winner adds 5% in the playoffs · 🛡 a Shield winner adds 5% in the league</p>`);
+
+  on('[data-coach]', 'click', (e) => {
+    S.coach = S.sim.coaches.find((c) => c.id === e.currentTarget.dataset.coach);
+    reviewScreen();
+  });
 }
 
 // ---------------------------------------------------------------- squad
@@ -472,6 +535,7 @@ function drawReview() {
         <b class="mono" style="font-size:17px">${(projected * SEASON_GAMES).toFixed(0)} pts</b></div>
     </div>
     <div id="pane">${squadPane(true)}</div>
+    ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}
     <button class="btn" id="play" style="margin-top:14px">Play the 2026 season →</button>
     <p class="dim center" style="font-size:11.5px;margin-top:8px">
       Last chance to rearrange. You need ${TARGET_POINTS} points and MLS Cup.</p>`, true);
@@ -489,6 +553,7 @@ function seasonScreen() {
     teamName: S.teamName,
     rng: S.rng,
     rosters: S.rosters,
+    coach: S.coach,
   });
   S.speed = 1;
   S.skip = false;
@@ -774,6 +839,7 @@ function endScreen() {
     </div>
 
     ${awardsCard(r.awards, 'Regular-season leaders')}
+    ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}
     <div style="margin-top:12px">${squadPane(false)}</div>
 
     <div class="card" style="margin-top:12px">
@@ -808,7 +874,8 @@ function shareText(withLink = false) {
   const cup = r.wonCup ? '🏆 MLS Cup' : (r.madePlayoffs ? `Out in ${lastRound()}` : 'No playoffs');
   const top = r.awards.allScorers[0];
   return [
-    `Road to 75 ⚽ ${DIFFICULTIES[S.difficulty].label} · ${S.formation}`,
+    `Road to 75 ⚽ ${DIFFICULTIES[S.difficulty].label} · ${S.formation}`
+      + (S.coach ? ` · ${S.coach.name}` : ''),
     `${r.points} pts · ${cup}${r.won ? ' · IMMORTAL 👑' : ''}`,
     ...rows,
     top ? `⚽ ${shortName(top.name)} ${top.goals}` : '',
