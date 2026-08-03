@@ -1,12 +1,10 @@
 // End-of-season achievements. Pure functions over a finished season so the
 // headless test can check them without a browser.
 
-import { TARGET_POINTS, SEASON_GAMES } from './sim.js';
+import { LEAGUE } from './sim.js';
 
-// Real MLS marks worth chasing.
-export const RECORD_POINTS = 74;   // New England, 2021
-export const RECORD_GOALS = 85;    // Los Angeles FC, 2019
-export const RECORD_WINS = 22;     // shared, several clubs
+// The real single-season marks worth chasing, computed per league in
+// scripts/build_data.py. MLS: 74 points, 85 goals, 22 wins. NWSL: 65, 58, 21.
 
 /**
  * Everything the squad earned this season, best first.
@@ -21,29 +19,39 @@ export function achievements(season, squad) {
   const out = [];
   const add = (id, name, note, tier = 'silver') => out.push({ id, name, note, tier });
 
+  const REC = LEAGUE.records;
+  // Thresholds that aren't records scale with the season length, so a 30-game
+  // NWSL year isn't judged against 34-game MLS marks.
+  const per = (n) => Math.round((n / 34) * LEAGUE.games);
+
   if (r.won) add('immortal', 'Immortal', `${r.points} points and the Cup`, 'legendary');
-  if (rec.l === 0) add('invincible', 'Invincible', `Unbeaten all ${SEASON_GAMES} games`, 'legendary');
-  if (r.points > RECORD_POINTS) {
-    add('record', 'Record Breakers', `${r.points} points beats the MLS record of ${RECORD_POINTS}`, 'legendary');
-  } else if (r.points === RECORD_POINTS) {
-    add('equalled', 'Equal Best', `Matched the ${RECORD_POINTS}-point record`, 'gold');
+  if (rec.l === 0) add('invincible', 'Invincible', `Unbeaten all ${LEAGUE.games} games`, 'legendary');
+  if (r.points > REC.points) {
+    add('record', 'Record Breakers', `${r.points} points beats the ${LEAGUE.name} record of ${REC.points}`, 'legendary');
+  } else if (r.points === REC.points) {
+    add('equalled', 'Equal Best', `Matched the ${REC.points}-point record`, 'gold');
   }
-  if (goals > RECORD_GOALS) add('goalglut', 'Goal Machine', `${goals} goals beats the record of ${RECORD_GOALS}`, 'legendary');
-  else if (goals >= 70) add('freescoring', 'Free Scoring', `${goals} goals`, 'gold');
+  if (goals > REC.goals) add('goalglut', 'Goal Machine', `${goals} goals beats the record of ${REC.goals}`, 'legendary');
+  else if (goals >= per(70)) add('freescoring', 'Free Scoring', `${goals} goals`, 'gold');
 
-  if (rec.w > RECORD_WINS) add('winrecord', 'Winning Machine', `${rec.w} wins beats the record of ${RECORD_WINS}`, 'gold');
-  if (conceded <= 25) add('fortress', 'Fortress', `Only ${conceded} conceded`, 'gold');
-  if (goals - conceded >= 50) add('dominant', 'Dominant', `+${goals - conceded} goal difference`, 'gold');
+  if (rec.w > REC.wins) add('winrecord', 'Winning Machine', `${rec.w} wins beats the record of ${REC.wins}`, 'gold');
+  if (conceded <= per(25)) add('fortress', 'Fortress', `Only ${conceded} conceded`, 'gold');
+  if (goals - conceded >= per(50)) add('dominant', 'Dominant', `+${goals - conceded} goal difference`, 'gold');
 
-  if (r.wonCup) add('cup', 'MLS Cup Champions', 'Lifted the trophy', 'gold');
-  if (r.seed === 1) add('shield', "Supporters' Shield", 'Best record in the conference', 'gold');
-  if (r.points >= TARGET_POINTS && !r.wonCup) add('sotarget', 'So Close', `${r.points} points, no Cup`, 'silver');
+  if (r.wonCup) add('cup', `${LEAGUE.cupName} Champions`, 'Lifted the trophy', 'gold');
+  if (r.seed === 1) {
+    add('shield', LEAGUE.shieldName,
+      LEAGUE.conferences ? 'Best record in the conference' : 'Best record in the league', 'gold');
+  }
+  if (r.points >= LEAGUE.target && !r.wonCup) add('sotarget', 'So Close', `${r.points} points, no Cup`, 'silver');
 
+  // Scaled off the league's own record haul rather than a fixed number.
+  const recG = REC.playerGoals || 36;
   const top = r.awards.scorers[0];
-  if (top && top.goals >= 25) add('goldenboot', 'Golden Boot', `${top.name}, ${top.goals} goals`, 'gold');
-  else if (top && top.goals >= 18) add('sharpshooter', 'Sharpshooter', `${top.name}, ${top.goals} goals`, 'silver');
+  if (top && top.goals >= recG * 0.7) add('goldenboot', 'Golden Boot', `${top.name}, ${top.goals} goals`, 'gold');
+  else if (top && top.goals >= recG * 0.5) add('sharpshooter', 'Sharpshooter', `${top.name}, ${top.goals} goals`, 'silver');
   const topA = r.awards.assisters[0];
-  if (topA && topA.assists >= 15) add('playmaker', 'Playmaker', `${topA.name}, ${topA.assists} assists`, 'gold');
+  if (topA && topA.assists >= per(15)) add('playmaker', 'Playmaker', `${topA.name}, ${topA.assists} assists`, 'gold');
 
   const streak = longestUnbeaten(r.results);
   if (streak >= 20) add('unbeaten', 'Untouchable', `${streak} games unbeaten`, 'gold');

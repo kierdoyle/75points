@@ -24,9 +24,10 @@ import sys
 
 import pandas as pd
 
+from leagues import LEAGUES, cache_name
+
 DEFAULT_DIR = "/Users/kierdoyle/Toronto/Data/MLSData"
 CACHE = os.path.join(os.path.dirname(__file__), ".cache")
-SEASONS = [str(y) for y in range(2013, 2027)]
 
 # Touches must clear this before a side is assigned -- a handful of events
 # average out to noise.
@@ -62,11 +63,13 @@ def summarise(path):
 
 
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR
+    league = sys.argv[1] if len(sys.argv) > 1 else "mls"
+    cfg = LEAGUES[league]
+    src = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_DIR
     os.makedirs(CACHE, exist_ok=True)
     summary = {}
-    for season in SEASONS:
-        path = os.path.join(src, f"{season}MLS_events.csv")
+    for season in cfg["seasons"]:
+        path = os.path.join(src, cfg["events_pattern"].format(season=season))
         if not os.path.exists(path):
             print(f"{season}: no event file -- players get no side or goal data")
             continue
@@ -78,10 +81,11 @@ def main():
         print(f"{season}: {len(s)} players, {sided} with enough touches, "
               f"{goals} goals, {assists} assists")
 
-    with open(os.path.join(CACHE, "events_summary.json"), "w") as f:
+    name = cache_name(league, "events_summary") + ".json"
+    with open(os.path.join(CACHE, name), "w") as f:
         json.dump(summary, f, separators=(",", ":"))
-    size = os.path.getsize(os.path.join(CACHE, "events_summary.json"))
-    print(f"\nwrote events_summary.json ({size / 1024:.0f} KB)")
+    size = os.path.getsize(os.path.join(CACHE, name))
+    print(f"\nwrote {name} ({size / 1024:.0f} KB)")
 
 
 if __name__ == "__main__":

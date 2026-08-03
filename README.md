@@ -2,6 +2,10 @@
 
 **Live:** https://mls-road-to-75.netlify.app
 
+Two leagues: **MLS** (75 points) and the **NWSL** (72). Pick one on the setup
+screen; each ships its own player pool, coaches, calibration and playoff
+format.
+
 > Currently private — the "75 Points" Netlify team has team-wide site protection
 > on, so the URL asks for a Netlify sign-in. To open it up to everyone, set
 > **Team settings → Site protection** to public in the Netlify dashboard.
@@ -18,14 +22,17 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
 
 ## How it plays
 
-1. **Setup** — pick a difficulty, one of five formations, and the conference your
-   club joins.
+1. **Setup** — pick a league, a difficulty, one of five formations, and (in MLS)
+   the conference your club joins.
 
    | | Rerolls | DPs | Salary cap |
    |---|---|---|---|
    | Easy | 5 | unlimited | — |
    | Normal | 3 | 3 | — |
    | Hard | **none** | 3 | yes |
+
+   There is no public NWSL salary data, so that league has no Designated
+   Players and no cap — its difficulties differ **only** in rerolls.
 
    Rerolls turn out to be the strongest difficulty lever by some distance —
    each one is worth about a point of final table position, more than the
@@ -60,6 +67,27 @@ record — and all 13 of each since 2013 match the record books.
 The coach is a mild net buff — choosing from a shortlist skews the draw above
 the median, and the trophy bonuses only ever add — but at 2.5% the effect is
 small enough not to distort the target.
+
+## The two leagues
+
+|  | MLS | NWSL |
+|---|---|---|
+| Seasons in the pool | 2013–2026 | 2016–2026 |
+| Minutes floor | 500 | 250 |
+| Season | 34 games, two conferences | 30 games, single table |
+| Target | 75 points | 72 points |
+| Playoffs | top 8 **per conference**, best-of-3 round one, then knockout | top 8 **overall**, straight knockout |
+| Designated Players / cap | yes | no |
+
+The NWSL's points record is Kansas City's 65, but that came in a 26-game
+season — 2.50 points a game, which over this 30-game one is a pace of 75. The
+72-point target sits just under that.
+
+Everything else is measured per league rather than shared: each has its own
+calibration fit, its own scoring environment (MLS averages 1.46 goals per team
+per game with a +0.52 home edge; the NWSL 1.32 and +0.27), its own tuned
+strength coefficient, and its own single-season records driving the
+achievements.
 
 ## Achievements
 
@@ -212,11 +240,14 @@ deploy previews and build statuses reported back on the PR.
 Rebuilding the data (needs the ASA client — `pip install itscalledsoccer pandas`):
 
 ```bash
-python scripts/fetch_raw.py      # caches the ASA API responses to scripts/.cache/
-python scripts/build_events.py   # summarises the MLS event CSVs (sides, goals, assists)
-python scripts/build_coaches.py  # rates head coaches and finds their trophies
-python scripts/build_data.py     # writes public/data/{pool,sim}.json
+python scripts/fetch_raw.py      mls   # caches the ASA API responses
+python scripts/build_events.py   mls   # event CSVs -> sides, goals, assists
+python scripts/build_coaches.py  mls   # rates coaches and finds their trophies
+python scripts/build_data.py     mls   # writes public/data/{pool,sim}.json
 ```
+
+Swap `mls` for `nwsl` to rebuild the other league (into `nwsl-pool.json` and
+`nwsl-sim.json`). Per-league settings live in `scripts/leagues.py`.
 
 `build_events.py` reads the season event CSVs (`{year}MLS_events.csv`), which
 live outside this repo because they are ~400 MB each; pass their directory as

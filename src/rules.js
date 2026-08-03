@@ -48,6 +48,23 @@ export const DIFFICULTIES = {
   },
 };
 
+/**
+ * The rules for a difficulty in a given league.
+ *
+ * There is no public NWSL salary data, so that league has no Designated
+ * Players and no cap -- its difficulties differ only in rerolls.
+ */
+export function rulesFor(difficulty, league = 'mls') {
+  const base = DIFFICULTIES[difficulty];
+  if (league === 'mls') return base;
+  return {
+    ...base,
+    maxDPs: Infinity,
+    salaryCap: false,
+    note: base.rerolls === 0 ? 'No rerolls' : `${base.rerolls} rerolls`,
+  };
+}
+
 // Everyone gets one look at a fresh set of coaching candidates.
 export const COACH_REROLLS = 1;
 

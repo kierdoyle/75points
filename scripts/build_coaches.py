@@ -18,20 +18,28 @@ Writes scripts/.cache/coaches.json (consumed by build_data.py).
 import json
 import os
 import pickle
+import sys
 
 import pandas as pd
 
+from leagues import LEAGUES, cache_name
+
 CACHE = os.path.join(os.path.dirname(__file__), ".cache")
-SEASONS = [str(y) for y in range(2013, 2027)]
-# 2026 is still being played, so it has no trophies to award yet.
-COMPLETED = [s for s in SEASONS if s != "2026"]
 
 # A coach needs this many league games before we trust their percentiles.
 MIN_GAMES = 30
 
 
-def load(name):
-    with open(os.path.join(CACHE, name + ".pkl"), "rb") as f:
+LEAGUE = sys.argv[1] if len(sys.argv) > 1 else "mls"
+CFG = LEAGUES[LEAGUE]
+SEASONS = CFG["seasons"]
+# The current season is still being played, so it has no trophies to award.
+COMPLETED = [s for s in SEASONS
+             if s != CFG["current_season"] and s not in CFG["skip_trophies"]]
+
+
+def load(stem):
+    with open(os.path.join(CACHE, cache_name(LEAGUE, stem) + ".pkl"), "rb") as f:
         return pickle.load(f)
 
 
@@ -134,9 +142,13 @@ def main():
                 cups.setdefault(mid, []).append((season, team_name.get(tid, "?")))
 
     coaches = []
+    excluded = []
     for mid, a in acc.items():
         nm = name_by_id.get(mid)
         if not isinstance(nm, str) or not nm or a["games"] < MIN_GAMES or a["w"] <= 0:
+            continue
+        if nm in CFG["exclude_coaches"]:
+            excluded.append(nm)
             continue
         years = sorted(a["seasons"])
         main_club = max(a["clubs"], key=lambda t: a["clubs"][t])
@@ -154,7 +166,13 @@ def main():
         })
     coaches.sort(key=lambda c: -(c["off"] + c["def"]))
 
-    print(f"{len(coaches)} coaches with {MIN_GAMES}+ games\n")
+    print(f"{len(coaches)} coaches with {MIN_GAMES}+ games")
+    if CFG["exclude_coaches"]:
+        missing = CFG["exclude_coaches"] - set(excluded)
+        print(f"excluded by name: {', '.join(sorted(excluded)) or 'none'}")
+        if missing:
+            print(f"  (not present in the pool anyway: {', '.join(sorted(missing))})")
+    print()
     print("best by combined rating:")
     for c in coaches[:8]:
         badge = ("🏆" if c["cups"] else "") + ("🛡" if c["shields"] else "")
@@ -164,18 +182,18 @@ def main():
     for c in coaches[-4:]:
         print(f"  {c['name'][:24]:<24} off {c['off']:.2f}  def {c['def']:.2f}  {c['games']:>3}g")
 
-    print("\nMLS Cup winners found:")
+    print(f"\n{CFG['cup_name']} winners found:")
     for mid, wins in sorted(cups.items(), key=lambda kv: kv[1][0][0]):
         for season, club in wins:
             print(f"  {season}  {club:<5} {name_by_id.get(mid, '?')}")
-    print("\nSupporters' Shield winners found:")
+    print(f"\n{CFG['shield_name']} winners found:")
     for mid, wins in sorted(shields.items(), key=lambda kv: kv[1][0][0]):
         for season, club in wins:
             print(f"  {season}  {club:<5} {name_by_id.get(mid, '?')}")
 
-    with open(os.path.join(CACHE, "coaches.json"), "w") as f:
+    with open(os.path.join(CACHE, cache_name(LEAGUE, "coaches") + ".json"), "w") as f:
         json.dump(coaches, f)
-    print(f"\nwrote coaches.json ({len(coaches)} coaches)")
+    print(f"\nwrote {cache_name(LEAGUE, 'coaches')}.json ({len(coaches)} coaches)")
 
 
 if __name__ == "__main__":

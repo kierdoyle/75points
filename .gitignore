@@ -4,3 +4,6 @@ dist/
 scripts/.cache/
 .DS_Store
 *.log
+
+# python bytecode
+scripts/__pycache__/

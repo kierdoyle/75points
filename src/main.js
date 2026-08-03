@@ -3,11 +3,11 @@ import {
   DIFFICULTIES, FORMATIONS, SQUAD_SIZE, SLOT_LABEL, SIDE_LABEL, COACH_REROLLS,
   SALARY_CAP, ALLOCATION_MONEY,
   makeSquad, countDPs, openSlotsFor, fitFor, effectiveScore, swapTargets,
-  budget, isVersatile,
+  budget, isVersatile, rulesFor,
 } from './rules.js';
 import { achievements } from './achievements.js';
 import { loadPool, makeRng, drawSpin, annotate, pick, currentRosters } from './pool.js';
-import { simSeason, squadStrength, TARGET_POINTS, SEASON_GAMES } from './sim.js';
+import { simSeason, squadStrength, configureLeague, LEAGUE } from './sim.js';
 
 const app = document.getElementById('app');
 
@@ -104,25 +104,51 @@ const on = (sel, ev, fn) => app.querySelectorAll(sel).forEach((n) => n.addEventL
 
 // ---------------------------------------------------------------- state
 
+// The two leagues ship as separate data files; only the chosen one is loaded.
+const LEAGUES = {
+  mls: { key: 'mls', label: 'MLS', blurb: 'Every MLS team-season since 2013',
+         pool: './data/pool.json', sim: './data/sim.json' },
+  nwsl: { key: 'nwsl', label: 'NWSL', blurb: 'Every NWSL team-season since 2016',
+          pool: './data/nwsl-pool.json', sim: './data/nwsl-sim.json' },
+};
+
 const S = {
-  pool: null, sim: null, rosters: null,
+  pool: null, sim: null, rosters: null, loaded: null,
+  league: 'mls',
   difficulty: 'normal', formation: '4-3-3', conference: 'East', teamName: '',
   squad: null, picked: null, rerolls: 0, spin: null, tab: 'spin',
   rng: null, season: null, swapFrom: null, speed: 1, skip: false,
 };
 
-async function boot() {
-  render('<div class="hero"><div class="badge-75">75</div><p class="muted">Loading 14 seasons of MLS…</p></div>');
+/** Load a league's data, once. Switching leagues reloads and re-configures. */
+async function loadLeague(key) {
+  if (S.loaded === key) return;
+  const cfg = LEAGUES[key];
+  render(`<div class="hero"><div class="badge-75">${LEAGUES[key] && S.sim ? S.sim.target : ''}</div>
+    <p class="muted">Loading ${cfg.label}…</p></div>`);
   const [pool, sim] = await Promise.all([
-    fetch('./data/pool.json').then((r) => r.json()),
-    fetch('./data/sim.json').then((r) => r.json()),
+    fetch(cfg.pool).then((r) => r.json()),
+    fetch(cfg.sim).then((r) => r.json()),
   ]);
   S.pool = loadPool(pool);
   S.sim = sim;
+  S.loaded = key;
   S.rosters = currentRosters(S.pool);
-  // Only ~31 clubs appear across all 14 seasons, so warming every badge is
-  // cheap and keeps the spin reel showing real crests instead of monograms.
-  for (const id of new Set(S.pool.spins.map((s) => s.teamId))) new Image().src = BADGE(id);
+  configureLeague({
+    key: sim.league, name: sim.name, games: sim.games, target: sim.target,
+    conferences: sim.conferences, cupName: sim.cupName, shieldName: sim.shieldName,
+    records: sim.records, baseGoals: sim.baseGoals, homeLog: sim.homeLog,
+    kStrength: sim.kStrength,
+  });
+  if (!sim.conferences) S.conference = 'League';
+  else if (S.conference === 'League') S.conference = 'East';
+  // Only a few dozen clubs appear across all seasons, so warming every badge
+  // is cheap and keeps the spin reel showing real crests, not monograms.
+  for (const id of new Set(S.pool.spins.map((x) => x.teamId))) new Image().src = BADGE(id);
+}
+
+async function boot() {
+  await loadLeague(S.league);
   setupScreen();
 }
 
@@ -131,19 +157,31 @@ async function boot() {
 function setupScreen() {
   render(`
     <div class="hero">
-      <div class="badge-75">75</div>
-      <h1>Road to 75</h1>
-      <p>Spin your way through every MLS team-season since 2013. Draft 14 players.
-         Then win <b>75 points</b> — one more than the all-time record — <b>and</b> MLS Cup.</p>
+      <div class="badge-75">${LEAGUE.target}</div>
+      <h1>Road to ${LEAGUE.target}</h1>
+      <p>${LEAGUES[S.league].blurb}. Draft 14 players. Then win
+         <b>${LEAGUE.target} points</b> — one more than the all-time record —
+         <b>and</b> the ${esc(LEAGUE.cupName)}.</p>
     </div>
     <div class="stack">
       <div class="card">
+        <div class="eyebrow">League</div>
+        <div class="opts two" style="margin-top:8px" data-group="league">
+          ${Object.values(LEAGUES).map((l) => `
+            <button class="opt" data-val="${l.key}" aria-pressed="${S.league === l.key}">
+              <b>${l.label}</b><span>${l.key === S.league ? `${LEAGUE.target} points` : 'switch'}</span>
+            </button>`).join('')}
+        </div>
+      </div>
+      <div class="card">
         <div class="eyebrow">Difficulty</div>
         <div class="opts" style="margin-top:8px" data-group="difficulty">
-          ${Object.entries(DIFFICULTIES).map(([k, d]) => `
-            <button class="opt" data-val="${k}" aria-pressed="${S.difficulty === k}">
-              <b>${d.label}</b><span>${rerollLabel(d.rerolls)}<br>${d.note}</span>
-            </button>`).join('')}
+          ${Object.keys(DIFFICULTIES).map((k) => {
+    const d = rulesFor(k, S.league);
+    return `<button class="opt" data-val="${k}" aria-pressed="${S.difficulty === k}">
+              <b>${d.label}</b><span>${rerollLabel(d.rerolls)}${S.league === 'mls' ? `<br>${d.note}` : ''}</span>
+            </button>`;
+  }).join('')}
         </div>
       </div>
       <div class="card">
@@ -155,7 +193,7 @@ function setupScreen() {
             </button>`).join('')}
         </div>
       </div>
-      <div class="card">
+      ${LEAGUE.conferences ? `<div class="card">
         <div class="eyebrow">Conference</div>
         <div class="opts two" style="margin-top:8px" data-group="conference">
           ${['East', 'West'].map((c) => `
@@ -163,7 +201,12 @@ function setupScreen() {
               <b>${c}</b><span>${S.sim.opponents.filter((o) => o.conf === c).length} rivals</span>
             </button>`).join('')}
         </div>
-      </div>
+      </div>` : `<div class="card between">
+        <div><div class="eyebrow">Format</div>
+          <b style="font-size:14px">Single table</b></div>
+        <div class="dim" style="font-size:12px;text-align:right">
+          ${S.sim.opponents.length} rivals · ${LEAGUE.games} games<br>top 8 make the playoffs</div>
+      </div>`}
       <div class="card">
         <div class="eyebrow">Club name</div>
         <input type="text" id="tname" maxlength="22" placeholder="Your Club FC" value="${esc(S.teamName)}" />
@@ -175,10 +218,15 @@ function setupScreen() {
       </p>
     </div>`);
 
-  on('[data-group] .opt', 'click', (e) => {
+  on('[data-group] .opt', 'click', async (e) => {
     const btn = e.currentTarget;
     const group = btn.closest('[data-group]').dataset.group;
     S[group] = btn.dataset.val;
+    if (group === 'league') {
+      await loadLeague(S.league);
+      setupScreen();
+      return;
+    }
     btn.closest('[data-group]').querySelectorAll('.opt')
       .forEach((o) => o.setAttribute('aria-pressed', String(o === btn)));
   });
@@ -199,7 +247,7 @@ const shape = (f) => ({
 
 function startDraft() {
   S.rng = makeRng((Math.random() * 2 ** 32) >>> 0);
-  S.rules = DIFFICULTIES[S.difficulty];
+  S.rules = rulesFor(S.difficulty, S.league);
   S.squad = makeSquad(S.formation);
   S.coach = null;
   S.picked = new Set();
@@ -492,7 +540,7 @@ function drawCoaches() {
     </div>
     <div class="coaches">${S.coachOptions.map((c) => coachCard(c, true)).join('')}</div>
     <p class="dim center" style="font-size:11.5px;margin-top:10px">
-      🏆 an MLS Cup winner adds 2.5% in the playoffs · 🛡 a Shield winner adds 2.5% in the league</p>`);
+      🏆 a ${esc(LEAGUE.cupName)} winner adds 2.5% in the playoffs · 🛡 a ${esc(LEAGUE.shieldName)} winner adds 2.5% in the league</p>`);
 
   on('[data-coach]', 'click', (e) => {
     S.coach = S.sim.coaches.find((c) => c.id === e.currentTarget.dataset.coach);
@@ -591,20 +639,20 @@ function reviewScreen() {
 
 function drawReview() {
   const { total } = squadStrength(S.squad);
-  const projected = S.sim.model.a + S.sim.model.b * (total / SEASON_GAMES);
+  const projected = S.sim.model.a + S.sim.model.b * (total / LEAGUE.games);
   render(`
     <div class="between" style="margin-bottom:10px">
       <div><div class="eyebrow">Squad complete</div>
         <h2 style="font-size:20px">${esc(S.teamName)}</h2></div>
       <div style="text-align:right"><div class="eyebrow">Projected</div>
-        <b class="mono" style="font-size:17px">${(projected * SEASON_GAMES).toFixed(0)} pts</b></div>
+        <b class="mono" style="font-size:17px">${(projected * LEAGUE.games).toFixed(0)} pts</b></div>
     </div>
     ${S.rules.salaryCap ? capBar() : ''}
     <div id="pane">${squadPane(true)}</div>
     ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}
     <button class="btn" id="play" style="margin-top:14px">Play the 2026 season →</button>
     <p class="dim center" style="font-size:11.5px;margin-top:8px">
-      Last chance to rearrange. You need ${TARGET_POINTS} points and MLS Cup.</p>`, true);
+      Last chance to rearrange. You need ${LEAGUE.target} points and the ${esc(LEAGUE.cupName)}.</p>`, true);
   bindSwap(drawReview);
   on('#play', 'click', seasonScreen);
 }
@@ -632,7 +680,7 @@ function seasonScreen() {
     <div class="card" style="margin-bottom:10px">
       <div class="between" style="margin-bottom:8px">
         <b class="mono" style="font-size:26px"><span id="pts">0</span>
-          <span class="dim" style="font-size:13px">/ ${TARGET_POINTS} pts</span></b>
+          <span class="dim" style="font-size:13px">/ ${LEAGUE.target} pts</span></b>
         <div style="text-align:right"><div class="eyebrow">Pace</div>
           <b class="mono" id="pace" style="font-size:13px">—</b></div>
       </div>
@@ -694,12 +742,12 @@ async function runTicker() {
     mountAvatars(card);
 
     ptsEl.textContent = r.pts;
-    const pace = (TARGET_POINTS * r.matchday) / SEASON_GAMES;
+    const pace = (LEAGUE.target * r.matchday) / LEAGUE.games;
     const diff = r.pts - pace;
     paceEl.textContent = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}`;
     paceEl.style.color = diff >= 0 ? 'var(--accent)' : 'var(--red)';
-    bar.style.width = `${Math.min(100, (r.pts / TARGET_POINTS) * 100)}%`;
-    tick.style.left = `${(r.matchday / SEASON_GAMES) * 100}%`;
+    bar.style.width = `${Math.min(100, (r.pts / LEAGUE.target) * 100)}%`;
+    tick.style.left = `${(r.matchday / LEAGUE.games) * 100}%`;
 
     if (!S.skip) await wait((900 + r.scorers.length * 220) / S.speed);
   }
@@ -754,7 +802,7 @@ function standingsScreen() {
   const table = S.season.standings[S.conference];
   render(`
     <div class="eyebrow">Final standings</div>
-    <h2 style="font-size:20px;margin-bottom:10px">${S.conference}ern Conference</h2>
+    <h2 style="font-size:20px;margin-bottom:10px">${LEAGUE.conferences ? `${S.conference}ern Conference` : `${esc(LEAGUE.name)} table`}</h2>
     <div class="card">
       <table class="table">
         <thead><tr><th>#</th><th>Club</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr></thead>
@@ -784,7 +832,7 @@ function playoffScreen() {
   S.speed = 1;
   S.skip = false;
   render(`
-    <div class="eyebrow">MLS Cup Playoffs</div>
+    <div class="eyebrow">${esc(LEAGUE.cupName)} Playoffs</div>
     <h2 style="font-size:20px;margin-bottom:10px">Your run</h2>
     <div class="controls">
       <button class="btn ghost sm" id="speed">▶ 1×</button>
@@ -842,8 +890,9 @@ function tieCard(t) {
       ${avatar(c.isUser ? '' : BADGE(c.id), c.abbr)}
       <span>${esc(name(c))}</span><span class="dim" style="font-size:10px">${seedOf(c)}</span>
     </div>`;
+  // Only worth naming the conference when the league actually has them.
   const head = (round, conf) => `<div class="eyebrow" style="margin-bottom:4px">`
-    + `${round}${conf && conf !== 'Cup' ? ` · ${conf}` : ''}</div>`;
+    + `${round}${LEAGUE.conferences && conf && conf !== 'Cup' ? ` · ${conf}` : ''}</div>`;
   const involved = isUser(t.high) || isUser(t.low) || isUser(t.host) || isUser(t.away);
 
   if (t.games) { // best-of-three
@@ -889,7 +938,7 @@ function endScreen() {
   let headline;
   if (r.won) headline = 'IMMORTAL';
   else if (r.wonCup) headline = 'Champions — but short of 75';
-  else if (r.points >= TARGET_POINTS) headline = `${r.points} points… no Cup`;
+  else if (r.points >= LEAGUE.target) headline = `${r.points} points… no Cup`;
   else if (r.madePlayoffs) headline = 'Not this time';
   else headline = 'Missed the playoffs';
 
@@ -903,10 +952,10 @@ function endScreen() {
       <p class="muted" style="margin-top:8px;font-size:13px">
         ${r.userRecord.w}W–${r.userRecord.d}D–${r.userRecord.l}L ·
         ${r.madePlayoffs ? `#${r.seed} seed` : 'missed the playoffs'} ·
-        ${r.wonCup ? '🏆 MLS Cup champions' : `${esc(champ.isUser ? S.teamName : champ.short)} won the Cup`}
+        ${r.wonCup ? `🏆 ${esc(LEAGUE.cupName)} champions` : `${esc(champ.isUser ? S.teamName : champ.short)} won it`}
       </p>
       <p class="dim" style="margin-top:10px;font-size:12px">
-        Needed ${TARGET_POINTS}+ points and MLS Cup.
+        Needed ${LEAGUE.target}+ points and the ${esc(LEAGUE.cupName)}.
         ${shortfall(r)}
       </p>
     </div>
@@ -954,7 +1003,7 @@ function endScreen() {
 /** Which half of the target was missed, in plain words. */
 function shortfall(r) {
   if (r.won) return 'You broke the record and lifted the trophy.';
-  const short = TARGET_POINTS - r.points;
+  const short = LEAGUE.target - r.points;
   if (short > 0 && !r.wonCup) {
     return `You were ${short} point${short === 1 ? '' : 's'} short and fell in the playoffs.`;
   }
@@ -966,10 +1015,10 @@ function shareText(withLink = false) {
   const r = S.season;
   const marks = r.results.map((x) => ({ W: '🟩', D: '🟨', L: '🟥' }[x.result]));
   const rows = [marks.slice(0, 17).join(''), marks.slice(17).join('')];
-  const cup = r.wonCup ? '🏆 MLS Cup' : (r.madePlayoffs ? `Out in ${lastRound()}` : 'No playoffs');
+  const cup = r.wonCup ? `🏆 ${LEAGUE.cupName}` : (r.madePlayoffs ? `Out in ${lastRound()}` : 'No playoffs');
   const top = r.awards.allScorers[0];
   return [
-    `Road to 75 ⚽ ${DIFFICULTIES[S.difficulty].label} · ${S.formation}`
+    `Road to ${LEAGUE.target} ⚽ ${LEAGUE.name} · ${DIFFICULTIES[S.difficulty].label} · ${S.formation}`
       + (S.coach ? ` · ${S.coach.name}` : ''),
     `${r.points} pts · ${cup}${r.won ? ' · IMMORTAL 👑' : ''}`,
     ...rows,
@@ -983,7 +1032,7 @@ function lastRound() {
   const ties = S.season.playoffs.userTies;
   if (!ties.length) return 'the playoffs';
   const round = ties[ties.length - 1].round;
-  return round.startsWith('Conference') ? `the ${round}` : round;
+  return /^(Conference|Semi|Quarter)/.test(round) ? `the ${round}` : round;
 }
 
 boot();

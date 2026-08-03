@@ -13,12 +13,37 @@
 
 import { effectiveScore } from './rules.js';
 
-export const BASE_GOALS = 1.4;      // league goals per team per game
-export const HOME_LOG = 0.2494;     // ~ +0.35 expected goal difference at home
-export const K_STRENGTH = 0.75;     // per-game g+ edge -> log goals
 export const MIN_LAMBDA = 0.2;
-export const SEASON_GAMES = 34;
-export const TARGET_POINTS = 75;
+
+/**
+ * Whichever league is being played. MLS runs two conferences, a 34-game
+ * season and a best-of-three opening playoff round; the NWSL runs a single
+ * table, 30 games and straight knockout. configureLeague() is called once
+ * when the league's data loads.
+ */
+export const LEAGUE = {
+  key: 'mls',
+  name: 'MLS',
+  games: 34,
+  target: 75,
+  conferences: true,
+  // Scoring environment, measured per league in build_data.py: goals per team
+  // per game, the home edge in log-goals, and the tuned strength coefficient.
+  baseGoals: 1.46,
+  homeLog: 0.3532,
+  kStrength: 0.75,
+  cupName: 'MLS Cup',
+  shieldName: "Supporters' Shield",
+  records: { points: 74, goals: 85, wins: 22 },
+};
+
+export function configureLeague(cfg) {
+  Object.assign(LEAGUE, cfg);
+}
+
+// Kept as live getters so existing call sites follow the configured league.
+export const seasonGames = () => LEAGUE.games;
+export const targetPoints = () => LEAGUE.target;
 // Nobody plays every minute of every game: starters carry most of a season,
 // substitutes chip in from the bench.
 export const STARTER_WEIGHT = 0.91;
@@ -36,7 +61,7 @@ export function squadStrength(squad) {
     const score = effectiveScore(s.player, s.pos);
     total += score * (s.starter ? STARTER_WEIGHT : SUB_WEIGHT);
   }
-  return { total, spg: total / SEASON_GAMES };
+  return { total, spg: total / LEAGUE.games };
 }
 
 // ------------------------------------------------------- goals and assists
@@ -152,10 +177,10 @@ const modsFor = (club, phase) => (club && club.mods ? club.mods[phase] : NEUTRAL
 
 /** Simulate one match. Returns goals for the home and away side. */
 export function simMatch(spgHome, spgAway, rng, mHome = NEUTRAL, mAway = NEUTRAL) {
-  const edge = (K_STRENGTH * (spgHome - spgAway)) / 2 + HOME_LOG / 2;
+  const edge = (LEAGUE.kStrength * (spgHome - spgAway)) / 2 + LEAGUE.homeLog / 2;
   // A side's attack lifts its own goals; the opponent's defence suppresses them.
-  const lh = Math.max(MIN_LAMBDA, (BASE_GOALS * Math.exp(edge) * mHome.atk) / mAway.def);
-  const la = Math.max(MIN_LAMBDA, (BASE_GOALS * Math.exp(-edge) * mAway.atk) / mHome.def);
+  const lh = Math.max(MIN_LAMBDA, (LEAGUE.baseGoals * Math.exp(edge) * mHome.atk) / mAway.def);
+  const la = Math.max(MIN_LAMBDA, (LEAGUE.baseGoals * Math.exp(-edge) * mAway.atk) / mHome.def);
   return { hg: poisson(lh, rng), ag: poisson(la, rng) };
 }
 
@@ -175,21 +200,35 @@ function applyResult(rec, gf, ga) {
 }
 
 /**
- * Build the player's 34-game fixture list: every conference rival home and
- * away, topped up to 34 with cross-conference trips (17 home / 17 away).
+ * Build the player's fixture list.
+ *
+ * In MLS that is every conference rival home and away, topped up to 34 with
+ * cross-conference trips. In the NWSL's single table it is a straight double
+ * round-robin; with the player's club making an odd number of teams it comes
+ * to more fixtures than the season is long, so whole home-and-away pairs are
+ * dropped from the end to keep the split even.
  */
 export function buildSchedule(clubs, conference, rng) {
-  const rivals = clubs.filter((c) => c.conf === conference && !c.isUser);
-  const cross = clubs.filter((c) => c.conf !== conference);
-  const fixtures = [];
-  for (const r of rivals) {
+  const others = clubs.filter((c) => !c.isUser);
+  const rivals = LEAGUE.conferences
+    ? others.filter((c) => c.conf === conference) : others;
+  const cross = LEAGUE.conferences ? others.filter((c) => c.conf !== conference) : [];
+
+  const order = [...rivals].sort(() => rng() - 0.5);
+  let fixtures = [];
+  for (const r of order) {
     fixtures.push({ opp: r, home: true });
     fixtures.push({ opp: r, home: false });
   }
+  if (fixtures.length > LEAGUE.games) {
+    // Trimming in pairs keeps home and away balanced.
+    fixtures = fixtures.slice(0, LEAGUE.games - (LEAGUE.games % 2));
+  }
   const shuffled = [...cross].sort(() => rng() - 0.5);
-  const need = SEASON_GAMES - fixtures.length;
+  const need = LEAGUE.games - fixtures.length;
   for (let i = 0; i < need; i++) {
-    fixtures.push({ opp: shuffled[i % shuffled.length], home: i % 2 === 0 });
+    const opp = shuffled.length ? shuffled[i % shuffled.length] : order[i % order.length];
+    fixtures.push({ opp, home: i % 2 === 0 });
   }
   // Spread across matchdays.
   for (let i = fixtures.length - 1; i > 0; i--) {
@@ -235,7 +274,7 @@ export function simRegularSeason(userClub, opponents, conference, rng, ctx = {})
   for (const club of opponents) {
     const rec = table.get(club.id);
     const others = clubs.filter((c) => c.id !== club.id);
-    for (let g = 0; g < SEASON_GAMES; g++) {
+    for (let g = 0; g < LEAGUE.games; g++) {
       const opp = others[Math.floor(rng() * others.length)];
       const home = g % 2 === 0;
       const { hg, ag } = home
@@ -246,14 +285,17 @@ export function simRegularSeason(userClub, opponents, conference, rng, ctx = {})
   }
 
   const standings = {};
-  for (const conf of ['East', 'West']) {
+  for (const conf of conferenceNames()) {
     standings[conf] = [...table.values()]
-      .filter((c) => c.conf === conf)
+      .filter((c) => !LEAGUE.conferences || c.conf === conf)
       .sort((a, b) => b.pts - a.pts || b.w - a.w || (b.gf - b.ga) - (a.gf - a.ga))
       .map((c, i) => ({ ...c, seed: i + 1 }));
   }
   return { results, standings, userRecord: { ...userRec } };
 }
+
+/** The tables a league keeps: two conferences, or one league-wide table. */
+export const conferenceNames = () => (LEAGUE.conferences ? ['East', 'West'] : ['League']);
 
 // ------------------------------------------------------------------ playoffs
 
@@ -318,8 +360,37 @@ function knockout(a, b, rng, ctx = {}) {
   };
 }
 
+/**
+ * The NWSL's bracket: the top eight of a single table, straight knockout the
+ * whole way, higher seed at home. The bracket is fixed rather than reseeded,
+ * so the winners of 1v8 and 4v5 meet in one semifinal and 2v7 and 3v6 in the
+ * other.
+ */
+function simSingleTablePlayoffs(standings, userId, rng, ctx) {
+  const seeds = standings.League.slice(0, 8);
+  const quarters = [[0, 7], [3, 4], [1, 6], [2, 5]].map(([hi, lo]) => ({
+    conf: 'League', round: 'Quarterfinal', ...knockout(seeds[hi], seeds[lo], rng, ctx),
+  }));
+  const semis = [
+    { conf: 'League', round: 'Semifinal', ...knockout(quarters[0].winner, quarters[1].winner, rng, ctx) },
+    { conf: 'League', round: 'Semifinal', ...knockout(quarters[2].winner, quarters[3].winner, rng, ctx) },
+  ];
+  const final = {
+    conf: 'Cup', round: LEAGUE.cupName,
+    ...knockout(semis[0].winner, semis[1].winner, rng, ctx),
+  };
+  const rounds = [...quarters, ...semis, final];
+  return {
+    rounds,
+    champion: final.winner,
+    userTies: rounds.filter((r) => r.host?.id === userId || r.away?.id === userId),
+    wonCup: final.winner.id === userId,
+  };
+}
+
 /** Top 8 per conference, Round One best-of-3, then single elimination. */
 export function simPlayoffs(standings, userId, rng, ctx = {}) {
+  if (!LEAGUE.conferences) return simSingleTablePlayoffs(standings, userId, rng, ctx);
   const rounds = [];
   const confWinners = {};
 
@@ -343,7 +414,7 @@ export function simPlayoffs(standings, userId, rng, ctx = {}) {
     rounds.push(...r1, ...semis, final);
   }
 
-  const cup = { conf: 'Cup', round: 'MLS Cup', ...knockout(confWinners.East, confWinners.West, rng, ctx) };
+  const cup = { conf: 'Cup', round: LEAGUE.cupName, ...knockout(confWinners.East, confWinners.West, rng, ctx) };
   rounds.push(cup);
 
   return {
@@ -412,6 +483,6 @@ export function simSeason({ squad, opponents, conference, teamName, rng, rosters
       allScorers: leaderboard(tally, 'goals'),
     },
     wonCup: madePlayoffs && playoffs.wonCup,
-    won: points >= TARGET_POINTS && madePlayoffs && playoffs.wonCup,
+    won: points >= LEAGUE.target && madePlayoffs && playoffs.wonCup,
   };
 }
