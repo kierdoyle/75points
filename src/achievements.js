@@ -11,7 +11,7 @@ import { LEAGUE } from './sim.js';
  * Each entry is { id, name, note, tier } where tier drives the styling:
  * 'legendary' > 'gold' > 'silver'.
  */
-export function achievements(season, squad) {
+export function achievements(season, squad, efficiency = null) {
   const r = season;
   const rec = r.userRecord;
   const goals = rec.gf;
@@ -52,6 +52,12 @@ export function achievements(season, squad) {
   else if (top && top.goals >= recG * 0.5) add('sharpshooter', 'Sharpshooter', `${top.name}, ${top.goals} goals`, 'silver');
   const topA = r.awards.assisters[0];
   if (topA && topA.assists >= per(15)) add('playmaker', 'Playmaker', `${topA.name}, ${topA.assists} assists`, 'gold');
+
+  // Nothing to do with the season -- this one is about the draft itself.
+  if (efficiency && efficiency.pct >= 99.95) {
+    add('perfectdraft', 'Perfect Draft',
+      'Took the best squad your spins allowed', 'legendary');
+  }
 
   const streak = longestUnbeaten(r.results);
   if (streak >= 20) add('unbeaten', 'Untouchable', `${streak} games unbeaten`, 'gold');

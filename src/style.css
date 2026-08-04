@@ -167,6 +167,19 @@ input[type="text"]:focus { outline: none; border-color: var(--accent); }
 .pickhead { display: flex; align-items: center; gap: 11px; padding-right: 34px; }
 .pickhead .avatar { width: 44px; height: 44px; font-size: 14px; }
 
+/* draft efficiency */
+.effcard .effpct { font-size: 30px; font-weight: 900; letter-spacing: -.03em; }
+.effbar { height: 7px; border-radius: 999px; background: var(--card-2); overflow: hidden; margin-top: 10px; }
+.effbar i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.effcard.perfect { border-color: var(--gold); background: rgba(232,163,23,.08); }
+.effcard.perfect .effpct { color: #9a6a00; }
+.effcard.perfect .effbar i { background: var(--gold); }
+.effcard.good .effpct { color: var(--accent-dim); }
+.effcard.ok .effpct { color: var(--muted); }
+.effcard.ok .effbar i { background: var(--muted); }
+.effcard.poor .effpct { color: var(--red); }
+.effcard.poor .effbar i { background: var(--red); }
+
 /* achievements */
 .achs { display: flex; flex-direction: column; gap: 6px; }
 .ach {

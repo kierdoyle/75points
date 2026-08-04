@@ -7,6 +7,7 @@ import {
 } from './rules.js';
 import { achievements } from './achievements.js';
 import { buildCard } from './exportcard.js';
+import { draftEfficiency } from './optimal.js';
 import { loadPool, makeRng, drawSpin, annotate, pick, currentRosters } from './pool.js';
 import { simSeason, squadStrength, configureLeague, LEAGUE } from './sim.js';
 
@@ -264,6 +265,8 @@ function startDraft() {
   S.squad = makeSquad(S.formation);
   S.coach = null;
   S.picked = new Set();
+  S.spinLog = [];
+  S.efficiency = null;
   S.rerolls = S.rules.rerolls;
   S.coachRerolls = COACH_REROLLS;
   S.tab = 'spin';
@@ -490,6 +493,9 @@ async function commitPick(player, slot) {
   slot.player = player;
   slot.justFilled = true;
   S.picked.add(player.id);
+  // Kept so the finished draft can be measured against the best squad these
+  // particular boards allowed.
+  S.spinLog.push(S.spin);
 
   // Flip to the pitch so the new signing pops into place, then spin again.
   S.tab = 'squad';
@@ -674,6 +680,7 @@ function reviewScreen() {
 
 function drawReview() {
   const { total } = squadStrength(S.squad);
+  if (!S.efficiency) S.efficiency = draftEfficiency(S.spinLog, S.squad, total, S.rules.maxDPs);
   const projected = S.sim.model.a + S.sim.model.b * (total / LEAGUE.games);
   render(`
     <div class="between" style="margin-bottom:10px">
@@ -682,6 +689,7 @@ function drawReview() {
       <div style="text-align:right"><div class="eyebrow">Projected</div>
         <b class="mono" style="font-size:17px">${hidden() ? '–' : `${(projected * LEAGUE.games).toFixed(0)} pts`}</b></div>
     </div>
+    ${efficiencyCard()}
     ${S.rules.salaryCap ? capBar() : ''}
     <div id="pane">${squadPane(true)}</div>
     ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}
@@ -790,9 +798,36 @@ async function runTicker() {
   standingsScreen();
 }
 
+/** How close the draft came to the best squad those boards allowed. */
+function efficiencyCard() {
+  const e = S.efficiency;
+  if (!e) return '';
+  const pct = e.pct;
+  const tone = pct >= 99.95 ? 'perfect' : pct >= 85 ? 'good' : pct >= 60 ? 'ok' : 'poor';
+  const verdict = pct >= 99.95 ? 'Perfect draft — nothing was left on the board'
+    : pct >= 90 ? 'Barely a point wasted'
+      : pct >= 75 ? 'A few better options went begging'
+        : pct >= 50 ? 'Plenty was left on the board'
+          : 'The board offered a lot more';
+  return `
+    <div class="card effcard ${tone}" style="margin-top:12px">
+      <div class="between">
+        <div>
+          <div class="eyebrow">Draft efficiency</div>
+          <div class="dim" style="font-size:11.5px;margin-top:3px">${verdict}</div>
+        </div>
+        <b class="mono effpct">${pct.toFixed(0)}%</b>
+      </div>
+      <div class="effbar"><i style="width:${Math.max(2, pct)}%"></i></div>
+      <div class="dim" style="font-size:10.5px;margin-top:5px">
+        Best possible from your ${SQUAD_SIZE} spins: ${e.best > 0 ? '+' : ''}${e.best.toFixed(1)} g+
+      </div>
+    </div>`;
+}
+
 /** Everything the season earned, badge-style. */
 function achievementsCard(season) {
-  const list = achievements(season, S.squad);
+  const list = achievements(season, S.squad, S.efficiency);
   S.achievements = list;
   if (!list.length) return '';
   return `
@@ -1005,6 +1040,7 @@ function endScreen() {
       </div>
     </div>
 
+    ${efficiencyCard()}
     ${achievementsCard(r)}
     ${awardsCard(r.awards, 'Regular-season leaders')}
     ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}

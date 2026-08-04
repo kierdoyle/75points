@@ -113,6 +113,28 @@ canvas rather than captured from the page: the ASA image buckets send no
 `Access-Control-Allow-Origin` header, so a badge or headshot painted onto a
 canvas would taint it and make the export throw.
 
+## Draft efficiency
+
+The spins you were dealt are fixed once they happen, so "the optimal draft"
+has a precise meaning: over those same 14 boards, the assignment of one player
+per board to one slot each that maximises squad strength. With 14 of each that
+is small enough to solve **exactly** — a DP over which slots are filled, 2^14
+states — rather than approximated with a greedy pass, which can be beaten and
+would make the number meaningless. The Designated Player limit is part of the
+solve, so the benchmark is a squad you could genuinely have built; it binds in
+about a quarter of drafts.
+
+The percentage places your squad between the worst and best assignments those
+boards allowed, rather than as a raw fraction of the best — a plain ratio
+breaks down as soon as either figure is negative, which a poor draft manages
+easily. For reference, a bot that always grabs the highest-value option in
+front of it lands around **87%**, and a random one around **43%**.
+
+Taking the very best squad the boards allowed earns the **Perfect Draft**
+achievement. It is genuinely hard: greedy play tops out near 98%, because the
+optimum sometimes needs you to pass on the best player in front of you to fit a
+later board.
+
 ## Achievements
 
 The season ends with whatever it earned: Invincible for going unbeaten, Record
