@@ -267,6 +267,11 @@ function startDraft() {
   S.picked = new Set();
   S.spinLog = [];
   S.efficiency = null;
+  // Last season's result has to go: hidden() treats a finished season as
+  // permission to reveal the ratings, so a stale one un-blinds Max mode on
+  // every draft after the first.
+  S.season = null;
+  S.achievements = null;
   S.rerolls = S.rules.rerolls;
   S.coachRerolls = COACH_REROLLS;
   S.tab = 'spin';
