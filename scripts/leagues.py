@@ -14,6 +14,9 @@ LEAGUES = {
         # season is no use for calibration.
         "skip_calibration": {"2020"},
         "skip_trophies": set(),
+        # Kept out of the spin pool as well: 22 games of bubble soccer produce
+        # g+ totals that aren't comparable with a full season's.
+        "exclude_seasons": {"2020"},
         "cup_name": "MLS Cup",
         "shield_name": "Supporters' Shield",
         "exclude_coaches": set(),
@@ -36,6 +39,8 @@ LEAGUES = {
         # season and no Championship, so it counts for neither.
         "skip_calibration": {"2020"},
         "skip_trophies": {"2020"},
+        # And nothing anyone should be able to draft from either.
+        "exclude_seasons": {"2020"},
         "cup_name": "NWSL Championship",
         "shield_name": "NWSL Shield",
         # Kept out of the game regardless of their record.

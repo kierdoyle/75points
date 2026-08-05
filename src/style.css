@@ -85,6 +85,12 @@ img { display: block; }
 }
 .pill.dp { background: rgba(123,79,196,.12); color: var(--dp); }
 .pill.side { background: var(--accent-soft); color: var(--accent-dim); padding: 1px 5px; }
+
+/* The daily challenge, set apart from the free-play options below it. */
+.card.daily {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, var(--accent-soft), transparent 65%), var(--card);
+}
 .pill.proj { background: rgba(232,163,23,.14); color: #9a6a00; }
 .pill.gold { background: rgba(232,163,23,.16); color: #9a6a00; }
 

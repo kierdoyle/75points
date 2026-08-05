@@ -68,25 +68,36 @@ export function currentRosters(pool) {
   return by;
 }
 
+/** Identity of a spin: one club's one season, the thing that can't repeat. */
+export const spinKey = (spin) => `${spin.teamId}|${spin.season}`;
+
 /**
  * Draw a spin the player can actually use.
  *
  * A spin offering no legal pick (everyone is the wrong position, already
  * drafted, or blocked by the DP cap) is dead: we discard it and draw again for
  * free, so a dead spin can never cost a reroll or soft-lock the draft.
+ *
+ * `seen` holds the spinKey of every board already shown this run, rerolled
+ * ones included, so no club-season comes up twice. Repeats are passed over
+ * silently rather than counted as dead spins.
  */
-export function drawSpin(pool, squad, pickedIds, rng, rules) {
+export function drawSpin(pool, squad, pickedIds, rng, rules, seen = null) {
+  const fresh = (s) => !seen || !seen.has(spinKey(s));
+  const usable = (s) => hasEligiblePick(s.roster, squad, pickedIds, rules);
   const skipped = [];
   for (let i = 0; i < 500; i++) {
     const spin = pick(pool.spins, rng);
-    if (hasEligiblePick(spin.roster, squad, pickedIds, rules)) {
-      return { spin, skipped };
-    }
+    if (!fresh(spin)) continue;
+    if (usable(spin)) return { spin, skipped };
     skipped.push(spin);
   }
   // Exhaustive fallback: scan the whole pool rather than ever returning null.
-  const usable = pool.spins.filter((s) => hasEligiblePick(s.roster, squad, pickedIds, rules));
-  return { spin: usable.length ? pick(usable, rng) : null, skipped };
+  // A pool too small to keep every board unique gives up the no-repeat rule
+  // before it gives up the draft.
+  const pickable = pool.spins.filter((s) => fresh(s) && usable(s));
+  const any = pickable.length ? pickable : pool.spins.filter(usable);
+  return { spin: any.length ? pick(any, rng) : null, skipped };
 }
 
 /** Annotate a roster with pick eligibility for rendering. */

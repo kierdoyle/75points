@@ -5,8 +5,10 @@ then:
 
     python scripts/build_data.py [mls|nwsl]
 
-Writes public/data/{pool,sim}.json for MLS and nwsl-{pool,sim}.json for the
-NWSL. The deployed game makes zero API calls.
+Writes src/data/{pool,sim}.json for MLS and nwsl-{pool,sim}.json for the NWSL.
+They live under src/ rather than public/ so the Vite build content-hashes
+them, which is what makes them cacheable forever. The deployed game makes zero
+API calls.
 """
 
 import json
@@ -50,6 +52,11 @@ MIN_MINUTES = CFG["min_minutes"]
 CALIB_SEASONS = [s for s in SEASONS
                  if s not in CFG["skip_calibration"] and s != CURRENT_SEASON]
 
+# Seasons the game never shows: not spinnable, and contributing nothing to the
+# career positions or flanks that eligibility is judged on. They still count
+# for calibration and records unless skip_calibration says otherwise.
+POOL_SEASONS = [s for s in SEASONS if s not in CFG["exclude_seasons"]]
+
 POSITIONS = ["GK", "CB", "FB", "DM", "CM", "AM", "W", "ST"]
 POS_IDX = {p: i for i, p in enumerate(POSITIONS)}
 
@@ -71,7 +78,7 @@ WEST = {"ATX", "COL", "FCD", "HOU", "LAG", "LAFC", "MIN", "POR", "RSL", "SD",
         "SJE", "SEA", "SKC", "STL", "VAN"}
 
 CACHE = os.path.join(os.path.dirname(__file__), ".cache")
-OUT = os.path.join(os.path.dirname(__file__), "..", "public", "data")
+OUT = os.path.join(os.path.dirname(__file__), "..", "src", "data")
 
 
 def load(stem):
@@ -208,7 +215,7 @@ def main():
     # touches to establish one.
     career_pos = {}
     career_side = {}
-    for season in SEASONS:
+    for season in POOL_SEASONS:
         ev_season = events.get(season, {})
         for df, forced in ((load(f"pg_{season}"), None), (load(f"gk_{season}"), "GK")):
             for _, r in df.iterrows():
@@ -277,6 +284,10 @@ def main():
             strength.setdefault((season, tid), 0.0)
             strength[(season, tid)] += adj
 
+            # Excluded seasons still feed the calibration fit above; they just
+            # never reach the spin pool below.
+            if season in CFG["exclude_seasons"]:
+                continue
             if mins < MIN_MINUTES:
                 continue
             gc = sal_team.get((pid, tid), sal_player.get(pid))

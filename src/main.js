@@ -3,13 +3,23 @@ import {
   DIFFICULTIES, FORMATIONS, SQUAD_SIZE, SLOT_LABEL, SIDE_LABEL, COACH_REROLLS,
   SALARY_CAP, ALLOCATION_MONEY,
   makeSquad, countDPs, openSlotsFor, fitFor, effectiveScore, swapTargets,
-  budget, isVersatile, rulesFor,
+  budget, isVersatile, rulesFor, hasEligiblePick,
 } from './rules.js';
 import { achievements } from './achievements.js';
 import { buildCard } from './exportcard.js';
 import { draftEfficiency } from './optimal.js';
-import { loadPool, makeRng, drawSpin, annotate, pick, currentRosters } from './pool.js';
+import { loadPool, makeRng, drawSpin, annotate, pick, currentRosters, spinKey } from './pool.js';
 import { simSeason, squadStrength, configureLeague, LEAGUE } from './sim.js';
+import { logPlay, flushQueue, dataVersion } from './logging.js';
+// Content-hashed URLs, not the data itself -- these are fetched on demand.
+import mlsPoolUrl from './data/pool.json?url';
+import mlsSimUrl from './data/sim.json?url';
+import nwslPoolUrl from './data/nwsl-pool.json?url';
+import nwslSimUrl from './data/nwsl-sim.json?url';
+import {
+  todayKey, buildDaily, dailySimRng, boardReport, fieldDistribution, percentileOf,
+  safeSlots,
+} from './daily.js';
 
 const app = document.getElementById('app');
 
@@ -112,19 +122,30 @@ const on = (sel, ev, fn) => app.querySelectorAll(sel).forEach((n) => n.addEventL
 // ---------------------------------------------------------------- state
 
 // The two leagues ship as separate data files; only the chosen one is loaded.
+//
+// Imported with ?url rather than fetched from a fixed path, so the build gives
+// each file a content-hashed name. That is what lets them be cached forever:
+// a returning player re-downloads nothing until the data actually changes, at
+// which point the hash changes and the new file is fetched. pool.json is 81%
+// of a cold visit's bytes, so this is where the bandwidth goes.
 const LEAGUES = {
   mls: { key: 'mls', label: 'MLS', blurb: 'Every MLS team-season since 2013',
-         pool: './data/pool.json', sim: './data/sim.json' },
+         pool: mlsPoolUrl, sim: mlsSimUrl },
   nwsl: { key: 'nwsl', label: 'NWSL', blurb: 'Every NWSL team-season since 2016',
-          pool: './data/nwsl-pool.json', sim: './data/nwsl-sim.json' },
+          pool: nwslPoolUrl, sim: nwslSimUrl },
 };
 
 const S = {
   pool: null, sim: null, rosters: null, loaded: null,
   league: 'mls',
   difficulty: 'normal', formation: '4-3-3', conference: 'East', teamName: '',
-  squad: null, picked: null, rerolls: 0, spin: null, tab: 'spin',
+  squad: null, picked: null, rerolls: 0, spin: null, spun: null, tab: 'spin',
   rng: null, season: null, swapFrom: null, speed: 1, skip: false,
+  // Daily challenge: the fixed board set, how far through it we are, and what
+  // was taken from each board (null where the board was forfeited).
+  daily: null, boardIx: 0, dailyPicks: null,
+  // Logging: one id per draft, and the picks in the order they were made.
+  playId: null, startedAt: null, pickLog: null, seed: null,
 };
 
 /** Load a league's data, once. Switching leagues reloads and re-configures. */
@@ -157,6 +178,8 @@ async function loadLeague(key) {
 async function boot() {
   await loadLeague(S.league);
   setupScreen();
+  // Anything a previous session could not deliver, after the game is up.
+  flushQueue();
 }
 
 // ---------------------------------------------------------------- setup
@@ -173,6 +196,7 @@ function setupScreen() {
          <b>and</b> the ${esc(LEAGUE.cupName)}.</p>
     </div>
     <div class="stack">
+      ${dailyCard()}
       <div class="card">
         <div class="eyebrow">League</div>
         <div class="opts two" style="margin-top:8px" data-group="league">
@@ -248,7 +272,176 @@ function setupScreen() {
     S.teamName = (document.getElementById('tname').value || '').trim() || 'Your Club FC';
     startDraft();
   });
+  on('.daily-go', 'click', (e) => {
+    S.teamName = (document.getElementById('tname')?.value || '').trim() || S.teamName || 'Your Club FC';
+    startDaily(e.currentTarget.dataset.league);
+  });
 }
+
+// ---------------------------------------------------------------- daily
+
+const DAILY_STORE = (league, key) => `r75:daily:${league}:${key}`;
+
+function dailyDone(league, key) {
+  try { return JSON.parse(localStorage.getItem(DAILY_STORE(league, key)) || 'null'); } catch { return null; }
+}
+
+function saveDaily(league, key, result) {
+  try { localStorage.setItem(DAILY_STORE(league, key), JSON.stringify(result)); } catch { /* private mode */ }
+}
+
+const prettyDate = (key) => new Date(`${key}T00:00:00Z`).toLocaleDateString(undefined, {
+  weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
+});
+
+/** The setup-screen entry point: one challenge per league per day. */
+function dailyCard() {
+  const key = todayKey();
+  return `
+    <div class="card daily">
+      <div class="between">
+        <div><div class="eyebrow">Daily challenge</div>
+          <b style="font-size:14px">${esc(prettyDate(key))}</b></div>
+        <span class="pill">Max · blind</span>
+      </div>
+      <p class="dim" style="font-size:11.5px;margin:8px 0 10px">
+        The same 14 club-seasons and the same formation for everyone, ratings hidden,
+        no rerolls. One attempt each.</p>
+      <div class="opts two" style="margin-top:2px">
+        ${Object.values(LEAGUES).map((l) => {
+    const done = dailyDone(l.key, key);
+    return `<button class="opt daily-go" data-league="${l.key}">
+            <b>${l.label}</b><span>${done ? `Played · ${done.points} pts` : 'Play today'}</span>
+          </button>`;
+  }).join('')}
+      </div>
+    </div>`;
+}
+
+async function startDaily(league) {
+  const key = todayKey();
+  S.league = league;
+  await loadLeague(league);
+
+  const done = dailyDone(league, key);
+  if (done) { dailyResultScreen(done); return; }
+
+  const challenge = buildDaily(S.pool, league, key);
+  if (!challenge) { toast('No challenge available today'); setupScreen(); return; }
+
+  S.daily = challenge;
+  S.difficulty = 'max';
+  S.formation = challenge.formation;
+  S.conference = LEAGUE.conferences ? challenge.conference : 'League';
+  S.rules = challenge.rules;
+  // The season gets its own rng, so match luck is the same for everyone
+  // regardless of how the draft went.
+  S.rng = dailySimRng(key, league);
+  S.squad = makeSquad(S.formation);
+  S.coach = null;
+  S.picked = new Set();
+  S.spun = new Set();
+  S.spinLog = [];
+  S.dailyPicks = [];
+  S.boardIx = 0;
+  S.dailyPercentile = null;
+  S.efficiency = null;
+  S.season = null;
+  S.achievements = null;
+  S.rerolls = 0;
+  S.coachRerolls = 0;
+  S.tab = 'spin';
+  S.swapFrom = null;
+  S.seed = null;
+  beginPlay();
+  advanceDaily();
+}
+
+// ---------------------------------------------------------------- logging
+
+/**
+ * Open a play in the log. Sent at the start rather than only at the end so
+ * abandoned drafts are visible -- without them the data only ever shows the
+ * people who finished, which flatters every difficulty setting.
+ */
+function beginPlay() {
+  S.playId = crypto.randomUUID();
+  S.startedAt = new Date().toISOString();
+  S.pickLog = [];
+  logPlay({
+    play_id: S.playId,
+    status: 'started',
+    league: S.league,
+    mode: S.daily ? 'daily' : 'free',
+    daily_date: S.daily ? S.daily.dateKey : null,
+    difficulty: S.difficulty,
+    formation: S.formation,
+    conference: S.conference,
+    data_version: dataVersion(LEAGUES[S.league].pool),
+    seed: S.seed,
+    started_at: S.startedAt,
+  });
+}
+
+/** Close the play out with the result and every pick that produced it. */
+function finishPlay() {
+  if (!S.playId) return;
+  const r = S.season;
+  const boards = S.daily ? S.daily.boards : S.spinLog;
+  let report = [];
+  try {
+    report = boardReport(boards, S.pickLog, S.formation, S.rules, !!S.daily);
+  } catch { /* metrics are optional; the result is not */ }
+
+  logPlay({
+    play_id: S.playId,
+    status: 'finished',
+    league: S.league,
+    mode: S.daily ? 'daily' : 'free',
+    daily_date: S.daily ? S.daily.dateKey : null,
+    difficulty: S.difficulty,
+    formation: S.formation,
+    conference: S.conference,
+    data_version: dataVersion(LEAGUES[S.league].pool),
+    seed: S.seed,
+    started_at: S.startedAt,
+    finished_at: new Date().toISOString(),
+    coach_name: S.coach ? S.coach.name : null,
+    points: r.points,
+    wins: r.userRecord.w,
+    draws: r.userRecord.d,
+    losses: r.userRecord.l,
+    made_playoffs: r.madePlayoffs,
+    playoff_seed: r.madePlayoffs ? r.seed : null,
+    won_cup: r.wonCup,
+    won: r.won,
+    squad_strength: round2(r.strength),
+    efficiency_pct: S.efficiency ? round2(S.efficiency.pct) : null,
+    percentile: S.dailyPercentile == null ? null : round2(S.dailyPercentile),
+    rerolls_used: Math.max(0, (S.rules.rerolls || 0) - (S.rerolls || 0)),
+    achievements: (S.achievements || []).map((a) => a.name),
+    // pickLog holds live player objects for boardReport; only these columns
+    // are sent.
+    picks: S.pickLog.map((p, i) => ({
+      pick_no: i + 1,
+      player_id: p.player.id,
+      player_name: p.player.name,
+      player_season: p.player.season,
+      team_id: p.player.teamId,
+      team_abbr: p.teamAbbr,
+      position: p.player.pos,
+      slot: p.slotPos,
+      starter: p.starter,
+      score: round2(p.player.score),
+      is_dp: !!p.player.dp,
+      salary: p.player.salary,
+      board_best_value: report[i] && report[i].best ? round2(report[i].best.value) : null,
+      taken_value: report[i] && report[i].took ? round2(report[i].took.value) : null,
+    })),
+  });
+}
+
+const round2 = (n) => (typeof n === 'number' ? Math.round(n * 100) / 100 : null);
 
 const rerollLabel = (n) => (n === 0 ? 'No rerolls' : `${n} reroll${n > 1 ? 's' : ''}`);
 
@@ -260,11 +453,19 @@ const shape = (f) => ({
 // ---------------------------------------------------------------- draft
 
 function startDraft() {
-  S.rng = makeRng((Math.random() * 2 ** 32) >>> 0);
+  // Kept so a finished play can be replayed exactly from the log.
+  S.seed = (Math.random() * 2 ** 32) >>> 0;
+  S.rng = makeRng(S.seed);
+  S.daily = null;
+  S.dailyPicks = null;
+  S.dailyPercentile = null;
+  S.boardIx = 0;
   S.rules = rulesFor(S.difficulty, S.league);
   S.squad = makeSquad(S.formation);
   S.coach = null;
   S.picked = new Set();
+  // Every club-season shown this run, so none of them comes up twice.
+  S.spun = new Set();
   S.spinLog = [];
   S.efficiency = null;
   // Last season's result has to go: hidden() treats a finished season as
@@ -276,13 +477,44 @@ function startDraft() {
   S.coachRerolls = COACH_REROLLS;
   S.tab = 'spin';
   S.swapFrom = null;
+  beginPlay();
   nextSpin();
 }
 
 function nextSpin(animate = true) {
-  const { spin } = drawSpin(S.pool, S.squad, S.picked, S.rng, S.rules);
+  // The daily's boards are fixed and pre-drawn, so they are served in order
+  // rather than drawn against the squad -- that is what makes the puzzle the
+  // same for everyone regardless of how they pick.
+  if (S.daily) {
+    S.spin = S.daily.boards[S.boardIx] || null;
+    draftScreen(animate);
+    return;
+  }
+  const { spin } = drawSpin(S.pool, S.squad, S.picked, S.rng, S.rules, S.spun);
   S.spin = spin;
+  if (spin) S.spun.add(spinKey(spin));
   draftScreen(animate);
+}
+
+/**
+ * Move to the next board of the daily, or to the coach once all 14 are spent.
+ *
+ * buildDaily only hands out board sets it has proved draftable to completion,
+ * so the skip loop below should never advance: there is no forfeit in the
+ * daily and the player is never asked to pass. It stays as a backstop so an
+ * unforeseen dead board degrades to a skipped one rather than a frozen screen.
+ */
+function advanceDaily() {
+  while (S.boardIx < SQUAD_SIZE
+    && !hasEligiblePick(S.daily.boards[S.boardIx].roster, S.squad, S.picked, S.rules)) {
+    S.spinLog.push(S.daily.boards[S.boardIx]);
+    S.dailyPicks.push(null);
+    S.boardIx++;
+    toast('Board skipped — nothing fit');
+  }
+  if (S.boardIx >= SQUAD_SIZE) { coachScreen(); return; }
+  S.tab = 'spin';
+  nextSpin();
 }
 
 // Max mode drafts blind. Once the season is under way there is nothing left
@@ -302,9 +534,13 @@ function draftScreen(animate = false) {
     : `${dps}<span class="frac">/${maxDPs}</span>`;
 
   render(`
+    ${S.daily ? `<div class="eyebrow center" style="margin-bottom:8px">
+      Daily · ${esc(LEAGUES[S.league].label)} · ${esc(S.formation)}</div>` : ''}
     <div class="topbar">
       <div class="stat"><b>${filled}<span class="frac">/${SQUAD_SIZE}</span></b><span>Drafted</span></div>
-      <div class="stat"><b style="color:${S.rerolls ? 'var(--text)' : 'var(--dim)'}">${S.rerolls}</b><span>Rerolls</span></div>
+      ${S.daily
+    ? `<div class="stat"><b>${Math.min(S.boardIx + 1, SQUAD_SIZE)}<span class="frac">/${SQUAD_SIZE}</span></b><span>Board</span></div>`
+    : `<div class="stat"><b style="color:${S.rerolls ? 'var(--text)' : 'var(--dim)'}">${S.rerolls}</b><span>Rerolls</span></div>`}
       <div class="stat"><b style="color:${dps >= maxDPs ? 'var(--dp)' : 'var(--text)'}">${dpText}</b><span>DPs</span></div>
     </div>
     ${S.rules.salaryCap ? capBar() : ''}
@@ -347,8 +583,20 @@ function capBar() {
     </div>`;
 }
 
+/**
+ * Where a player may go. In the daily this excludes any slot that would leave
+ * the remaining boards unfinishable, which is what removes the forfeit case.
+ */
+function slotOptions(player) {
+  return S.daily
+    ? safeSlots(player, S.squad, S.picked, S.daily.boards, S.boardIx, S.rules)
+    : openSlotsFor(player, S.squad);
+}
+
 function spinPane(spin, animate = false) {
-  const roster = annotate(spin.roster, S.squad, S.picked, S.rules);
+  const roster = annotate(spin.roster, S.squad, S.picked, S.rules)
+    .map((p) => (!p.blocked && S.daily && !slotOptions(p).length
+      ? { ...p, blocked: 'Dead end' } : p));
   const order = ['GK', 'CB', 'FB', 'DM', 'CM', 'AM', 'W', 'ST'];
   const groups = order
     .map((pos) => [pos, roster.filter((p) => p.pos === pos)])
@@ -439,7 +687,7 @@ function bindSpinPane() {
   });
   on('.pl[data-pid]', 'click', (e) => {
     const p = S.spin.roster.find((x) => x.id === e.currentTarget.dataset.pid);
-    const options = openSlotsFor(p, S.squad);
+    const options = slotOptions(p);
     if (options.length) chooseSlot(p, options);
   });
 }
@@ -501,6 +749,15 @@ async function commitPick(player, slot) {
   // Kept so the finished draft can be measured against the best squad these
   // particular boards allowed.
   S.spinLog.push(S.spin);
+  const record = {
+    player, slotId: slot.id, slotPos: slot.pos, starter: slot.starter,
+    teamAbbr: S.spin.team.abbr,
+  };
+  S.pickLog.push(record);
+  if (S.daily) {
+    S.dailyPicks.push(record);
+    S.boardIx++;
+  }
 
   // Flip to the pitch so the new signing pops into place, then spin again.
   S.tab = 'squad';
@@ -508,6 +765,9 @@ async function commitPick(player, slot) {
   await wait(950);
   slot.justFilled = false;
 
+  // The daily runs to the end of its 14 boards, which is not the same as a
+  // full squad once a board has been forfeited.
+  if (S.daily) { advanceDaily(); return; }
   if (S.squad.every((s) => s.player)) { coachScreen(); return; }
   S.tab = 'spin';
   nextSpin();
@@ -1017,7 +1277,10 @@ function endScreen() {
   else if (r.madePlayoffs) headline = 'Not this time';
   else headline = 'Missed the playoffs';
 
-  const best = [...S.squad].sort((a, b) => b.player.score - a.player.score)[0].player;
+  // A forfeited daily board leaves a slot empty, so the squad is not
+  // necessarily full here.
+  const filledSlots = S.squad.filter((s) => s.player);
+  const best = filledSlots.sort((a, b) => b.player.score - a.player.score)[0]?.player;
 
   render(`
     <div class="verdict ${verdict}">
@@ -1040,11 +1303,13 @@ function endScreen() {
         <div><div class="eyebrow">Squad g+</div>
           <b class="mono" style="font-size:18px">${r.strength > 0 ? '+' : ''}${r.strength.toFixed(1)}</b></div>
         <div style="text-align:right"><div class="eyebrow">Best pick</div>
-          <b style="font-size:14px">${esc(best.name)}</b>
-          <div class="dim" style="font-size:11px">${best.season} · +${best.score.toFixed(2)}</div></div>
+          ${best ? `<b style="font-size:14px">${esc(best.name)}</b>
+          <div class="dim" style="font-size:11px">${best.season} · +${best.score.toFixed(2)}</div>`
+    : '<b style="font-size:14px" class="dim">—</b>'}</div>
       </div>
     </div>
 
+    ${dailyReportCard()}
     ${efficiencyCard()}
     ${achievementsCard(r)}
     ${awardsCard(r.awards, 'Regular-season leaders')}
@@ -1057,7 +1322,12 @@ function endScreen() {
       <button class="btn sm" id="copy" style="width:100%;margin-top:12px">Copy result</button>
       <button class="btn ghost sm" id="png" style="width:100%;margin-top:8px">⬇ Export as PNG</button>
     </div>
-    <button class="btn ghost" id="again" style="margin-top:12px">Play again</button>`);
+    <button class="btn ghost" id="again" style="margin-top:12px">${S.daily ? 'Back' : 'Play again'}</button>`);
+
+  // The daily is one attempt: bank it as soon as the result exists. Both run
+  // after render so the scorecard's percentile is computed before it is used.
+  recordDaily();
+  finishPlay();
 
   on('#copy', 'click', async () => {
     const text = shareText(true);
@@ -1103,10 +1373,119 @@ function endScreen() {
     btn.disabled = false;
     btn.textContent = was;
   });
-  on('#again', 'click', setupScreen);
+  on('#again', 'click', () => { S.daily = null; setupScreen(); });
   on('#finalsquad .slot[data-slot]', 'click', (e) => {
     playerTip(S.squad.find((x) => x.id === e.currentTarget.dataset.slot));
   });
+}
+
+/**
+ * The daily's scorecard: how the draft went against what those exact 14 boards
+ * allowed, and where it lands in a field of random legal drafts over the same
+ * boards. All computed here -- there is no server and no leaderboard.
+ */
+function dailyReportCard() {
+  if (!S.daily) return '';
+  const rows = boardReport(S.daily.boards, S.dailyPicks, S.daily.formation, S.rules);
+  const strength = squadStrength(S.squad).total;
+  const field = fieldDistribution(S.daily.boards, S.daily.formation, S.rules, 500);
+  const pct = percentileOf(field, strength);
+  const optimal = S.efficiency ? S.efficiency.best : null;
+  S.dailyPercentile = pct;
+
+  const missed = rows.filter((x) => !x.forfeited && x.best).sort((a, b) => b.left - a.left)[0];
+  const nailed = rows.filter((x) => !x.forfeited && x.best).sort((a, b) => a.left - b.left)[0];
+  const eff = S.efficiency;
+
+  const stat = (label, value, sub = '') => `
+    <div class="stat"><b class="mono" style="font-size:16px">${value}</b>
+      <span>${label}</span>${sub ? `<div class="dim" style="font-size:10px">${sub}</div>` : ''}</div>`;
+
+  return `
+    <div class="card daily" style="margin-top:12px">
+      <div class="eyebrow" style="margin-bottom:10px">Daily scorecard · ${esc(prettyDate(S.daily.dateKey))}</div>
+      <div class="topbar" style="margin-bottom:10px">
+        ${stat('Of the best', eff ? `${eff.pct.toFixed(0)}%` : '—')}
+        ${stat('Beat', pct === null ? '—' : `${pct.toFixed(0)}%`, 'of random drafts')}
+        ${stat('Squad g+', `${strength > 0 ? '+' : ''}${strength.toFixed(1)}`,
+    optimal === null ? '' : `best was ${optimal > 0 ? '+' : ''}${optimal.toFixed(1)}`)}
+      </div>
+      ${missed ? `<div class="between" style="font-size:12px;padding-top:8px;border-top:1px solid var(--line)">
+        <span class="dim">Most left on the board</span>
+        <span><b>${esc(shortName(missed.best.player.name))}</b>
+          <span class="dim">${esc(missed.board.team.abbr)} ${missed.board.season} ·
+          −${missed.left.toFixed(2)} g+</span></span>
+      </div>` : ''}
+      ${nailed && nailed.left < 0.005 ? `<div class="between" style="font-size:12px;margin-top:6px">
+        <span class="dim">Best call</span>
+        <span><b>${esc(shortName(nailed.took.player.name))}</b>
+          <span class="dim">${esc(nailed.board.team.abbr)} ${nailed.board.season} · optimal</span></span>
+      </div>` : ''}
+    </div>`;
+}
+
+/** Persist the day's result so the challenge is one attempt. */
+function recordDaily() {
+  if (!S.daily) return;
+  const r = S.season;
+  saveDaily(S.daily.league, S.daily.dateKey, {
+    dateKey: S.daily.dateKey,
+    league: S.daily.league,
+    formation: S.daily.formation,
+    teamName: S.teamName,
+    points: r.points,
+    record: { w: r.userRecord.w, d: r.userRecord.d, l: r.userRecord.l },
+    wonCup: r.wonCup,
+    won: r.won,
+    madePlayoffs: r.madePlayoffs,
+    strength: r.strength,
+    efficiency: S.efficiency ? Number(S.efficiency.pct.toFixed(1)) : null,
+    percentile: S.dailyPercentile,
+    achievements: (S.achievements || []).map((a) => a.name),
+    share: shareText(),
+  });
+}
+
+/** Shown when the day's challenge has already been played. */
+function dailyResultScreen(done) {
+  const verdict = done.won ? 'win' : 'lose';
+  render(`
+    <div class="verdict ${verdict}">
+      <div class="eyebrow">${esc(done.teamName)} · daily · ${esc(LEAGUES[done.league].label)}</div>
+      <div class="big mono">${done.points}</div>
+      <h2>${done.won ? 'IMMORTAL' : `${done.record.w}W–${done.record.d}D–${done.record.l}L`}</h2>
+      <p class="muted" style="margin-top:8px;font-size:13px">
+        ${esc(prettyDate(done.dateKey))} · ${esc(done.formation)}
+      </p>
+      <p class="dim" style="margin-top:10px;font-size:12px">
+        You have already played this one. A new challenge lands at midnight UTC.
+      </p>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="topbar">
+        <div class="stat"><b class="mono" style="font-size:16px">${done.efficiency === null ? '—' : `${done.efficiency}%`}</b><span>Of the best</span></div>
+        <div class="stat"><b class="mono" style="font-size:16px">${done.percentile == null ? '—' : `${Math.round(done.percentile)}%`}</b><span>Beat</span></div>
+        <div class="stat"><b class="mono" style="font-size:16px">${done.strength > 0 ? '+' : ''}${done.strength.toFixed(1)}</b><span>Squad g+</span></div>
+      </div>
+      ${done.achievements.length ? `<p class="dim" style="font-size:11.5px;margin-top:10px">
+        🏅 ${esc(done.achievements.join(' · '))}</p>` : ''}
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="eyebrow" style="margin-bottom:8px">Share</div>
+      <div class="share">${esc(done.share)}</div>
+      <button class="btn sm" id="copy" style="width:100%;margin-top:12px">Copy result</button>
+    </div>
+    <button class="btn ghost" id="back" style="margin-top:12px">Back</button>`);
+
+  on('#copy', 'click', async () => {
+    try {
+      await navigator.clipboard.writeText(done.share);
+      toast('Copied!');
+    } catch { toast('Copy failed'); }
+  });
+  on('#back', 'click', () => { S.daily = null; setupScreen(); });
 }
 
 /** Which half of the target was missed, in plain words. */
@@ -1126,10 +1505,17 @@ function shareText(withLink = false) {
   const rows = [marks.slice(0, 17).join(''), marks.slice(17).join('')];
   const cup = r.wonCup ? `🏆 ${LEAGUE.cupName}` : (r.madePlayoffs ? `Out in ${lastRound()}` : 'No playoffs');
   const top = r.awards.allScorers[0];
+  const pct = S.dailyPercentile;
   return [
-    `Road to ${LEAGUE.target} ⚽ ${LEAGUE.name} · ${DIFFICULTIES[S.difficulty].label} · ${S.formation}`
-      + (S.coach ? ` · ${S.coach.name}` : ''),
+    S.daily
+      ? `Road to ${LEAGUE.target} ⚽ Daily ${S.daily.dateKey} · ${LEAGUE.name} · ${S.formation}`
+      : `Road to ${LEAGUE.target} ⚽ ${LEAGUE.name} · ${DIFFICULTIES[S.difficulty].label} · ${S.formation}`
+        + (S.coach ? ` · ${S.coach.name}` : ''),
     `${r.points} pts · ${cup}${r.won ? ' · IMMORTAL 👑' : ''}`,
+    S.daily && S.efficiency
+      ? `🎯 ${S.efficiency.pct.toFixed(0)}% of the best squad`
+        + (pct == null ? '' : ` · top ${Math.max(1, Math.round(100 - pct))}%`)
+      : '',
     ...rows,
     top ? `⚽ ${shortName(top.name)} ${top.goals}` : '',
     (S.achievements || []).length ? `🏅 ${S.achievements.slice(0, 3).map((a) => a.name).join(' · ')}` : '',

@@ -14,14 +14,14 @@ import {
   SALARY_CAP, ALLOCATION_MONEY, rulesFor,
 } from '../src/rules.js';
 import { achievements } from '../src/achievements.js';
-import { loadPool, makeRng, drawSpin, currentRosters } from '../src/pool.js';
+import { loadPool, makeRng, drawSpin, currentRosters, spinKey } from '../src/pool.js';
 import { openSlotsFor, blockReason, effectiveScore } from '../src/rules.js';
 import {
   simSeason, simMatch, squadStrength, LEAGUE, configureLeague,
 } from '../src/sim.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const read = (f) => JSON.parse(fs.readFileSync(path.join(root, '..', 'public', 'data', f)));
+const read = (f) => JSON.parse(fs.readFileSync(path.join(root, '..', 'src', 'data', f)));
 
 // `npm run sanity -- nwsl` checks the other league.
 const LEAGUE_KEY = process.argv.find((a) => a === 'nwsl') ? 'nwsl' : 'mls';
@@ -75,19 +75,24 @@ function draft(strategy, rng, rules = DIFFICULTIES.normal) {
   const formation = FORMATION_NAMES[Math.floor(rng() * FORMATION_NAMES.length)];
   const squad = makeSquad(formation);
   const picked = new Set();
+  const spun = new Set();
   let dead = 0;
   let rerolls = strategy === 'random' ? 0 : rules.rerolls;
 
   for (let n = 0; n < SQUAD_SIZE; n++) {
-    let { spin, skipped } = drawSpin(pool, squad, picked, rng, rules);
+    let { spin, skipped } = drawSpin(pool, squad, picked, rng, rules, spun);
     dead += skipped.length;
     if (!spin) throw new Error(`draft soft-locked after ${n} picks (${rules.label})`);
+    if (spun.has(spinKey(spin))) throw new Error(`drawSpin repeated ${spinKey(spin)}`);
+    spun.add(spinKey(spin));
 
     let legal = spin.roster.filter((p) => blockReason(p, squad, picked, rules) === null);
     while (rerolls > 0 && bestScore(legal, squad) < REROLL_THRESHOLD) {
       rerolls--;
-      ({ spin, skipped } = drawSpin(pool, squad, picked, rng, rules));
+      ({ spin, skipped } = drawSpin(pool, squad, picked, rng, rules, spun));
       dead += skipped.length;
+      if (spun.has(spinKey(spin))) throw new Error(`drawSpin repeated ${spinKey(spin)}`);
+      spun.add(spinKey(spin));
       legal = spin.roster.filter((p) => blockReason(p, squad, picked, rules) === null);
     }
     if (!legal.length) throw new Error('drawSpin returned a spin with no legal pick');
@@ -338,8 +343,18 @@ function main() {
     `median ${quant(G.topAssist, 0.5)}`]);
 
   // Difficulty modes must actually differ, and hard must stay completable.
-  ok.push(['hard mode is harder than normal', quant(H.pts, 0.5) < quant(modes.normal.pts, 0.5),
-    `hard ${quant(H.pts, 0.5)} vs normal ${quant(modes.normal.pts, 0.5)} pts`]);
+  //
+  // Judged on the mean rather than the median. A 30-game NWSL season lands
+  // both modes on the same integer median often enough that a strict median
+  // test reports a tie as a failure -- and NWSL modes differ only in rerolls,
+  // which are worth less the cleaner the spin pool is. The median still has to
+  // not move the wrong way, so a genuinely easier hard mode is still caught.
+  const hardMean = mean(H.pts);
+  const normalMean = mean(modes.normal.pts);
+  ok.push(['hard mode is harder than normal',
+    hardMean < normalMean && quant(H.pts, 0.5) <= quant(modes.normal.pts, 0.5),
+    `hard ${hardMean.toFixed(1)} vs normal ${normalMean.toFixed(1)} pts `
+      + `(medians ${quant(H.pts, 0.5)}/${quant(modes.normal.pts, 0.5)})`]);
   ok.push(['easy mode is the easiest', quant(modes.easy.pts, 0.5) >= quant(modes.normal.pts, 0.5),
     `easy ${quant(modes.easy.pts, 0.5)} pts`]);
   if (LEAGUE_KEY === 'mls') {

@@ -1,3 +1,25 @@
 [build]
   publish = "dist"
   command = "npm run build"
+
+# Everything Vite emits into /assets is content-hashed, including the league
+# data files, so a given URL's contents can never change. Caching them forever
+# means a returning player fetches nothing but index.html -- no re-download and
+# no revalidation request. Netlify's default is max-age=0, must-revalidate,
+# which would cost a request per asset per visit.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# The entry point must never be cached, or a deploy would not reach anyone:
+# it is the document that points at the new hashed asset names.
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
