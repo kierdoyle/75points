@@ -25,7 +25,7 @@ import {
   playerRow, pitchSlot, coachCard, BADGE, HEAD, ASA_SITE, ASA_LOGO, ASA_CREST,
   gplus, money, moneyShort,
 } from './ui.js';
-import { roomEntry, roomCard, resumeRoom } from './roomui.js';
+import { roomEntry, roomCard, roomResumeCard, resumeRoom } from './roomui.js';
 
 
 // ---------------------------------------------------------------- state
@@ -91,9 +91,9 @@ async function loadLeague(key) {
 async function boot() {
   await loadLeague(S.league);
   setupScreen();
-  // Back into whatever room this device was last drafting in -- a reload
-  // mid-draft should land on the board, not the menu.
-  resumeRoom(shell());
+  // Only a shared link jumps straight into a room. Anything else is offered
+  // on the setup screen instead -- see roomResumeCard.
+  if (/^#room=[A-Za-z]{4}$/.test(window.location.hash)) resumeRoom(shell());
   // Anything a previous session could not deliver, after the game is up.
   flushQueue();
 }
@@ -112,6 +112,7 @@ function setupScreen() {
          <b>and</b> the ${esc(LEAGUE.cupName)}.</p>
     </div>
     <div class="stack">
+      ${roomResumeCard()}
       ${dailyCard()}
       ${roomCard()}
       <div class="card">
@@ -190,6 +191,13 @@ function setupScreen() {
     startDraft();
   });
   on('.room-go', 'click', (e) => roomEntry(e.currentTarget.dataset.mode, shell()));
+  on('#resume-room', 'click', async (e) => {
+    e.currentTarget.disabled = true;
+    e.currentTarget.textContent = 'Rejoining…';
+    // Not quiet: this was an explicit request, so a dead room has to say so
+    // rather than silently doing nothing.
+    if (!await resumeRoom(shell(), { quiet: false })) setupScreen();
+  });
   on('.daily-go', 'click', (e) => {
     S.teamName = (document.getElementById('tname')?.value || '').trim() || S.teamName || 'Your Club FC';
     startDaily(e.currentTarget.dataset.league);

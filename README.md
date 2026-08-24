@@ -85,8 +85,10 @@ The shape of it:
   league at once and *play each other* — conference rivals home and away,
   everyone else at least once. One table, one bracket, one Cup. The room screen
   ranks all of you, and the head-to-heads are there to argue about.
-* **Reload-safe.** Refresh, switch apps, drop your phone — reopening the game
-  puts you back in your seat with your squad intact.
+* **Reload-safe.** Refresh, switch apps, drop your phone — the setup screen
+  offers your room back, and rejoining restores your seat and squad intact. A
+  shared `#room=` link goes straight in. Leaving is always one tap away, from
+  the lobby or mid-draft.
 
 Rerolls do not apply in a room: the board is shared, so there is nothing to
 reroll. Difficulty still sets the DP limit and the salary cap — which means that

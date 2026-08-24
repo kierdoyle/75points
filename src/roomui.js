@@ -75,28 +75,65 @@ export function roomCard() {
     </div>`;
 }
 
+/** The room this device was last in, if any -- offered on the setup screen. */
+export const rememberedRoom = () => hashCode() || lastCode();
+
 /**
- * Rejoin the room this device was last in, if it is still running.
+ * A card on the setup screen offering the way back into a room.
  *
- * Phones reload, tabs get closed, someone taps the wrong thing. A draft that
- * could not be re-entered would strand the whole room behind a seat that can
- * never pick again, so this runs on boot and is why join_room re-seats a
- * client it already knows rather than refusing it.
+ * Deliberately an offer rather than an automatic redirect. Resuming used to
+ * happen on boot, which meant anyone who had ever been in a room was thrown
+ * back into it before the menu had finished painting -- with no way to reach
+ * the setup screen again, and so no way to start a different room. One tap is
+ * a small price for not trapping people.
  */
-export async function resumeRoom(shell) {
-  const code = hashCode() || lastCode();
+export function roomResumeCard() {
+  const code = rememberedRoom();
+  if (!code) return '';
+  return `
+    <div class="card room-card">
+      <div class="between">
+        <div><div class="eyebrow">You were drafting</div>
+          <b style="font-size:14px">Room ${esc(code)}</b></div>
+        <button class="btn sm" id="resume-room">Rejoin →</button>
+      </div>
+    </div>`;
+}
+
+/** Forget the remembered room without going near the network. */
+export function forgetRoom() {
+  rememberCode('');
+}
+
+/**
+ * Go back into a room. Returns false if it is gone, so the caller can say so.
+ */
+export async function resumeRoom(shell, { quiet = true } = {}) {
+  const code = rememberedRoom();
   if (!code) return false;
   ctx = shell;
   try {
     const room = await joinRoom({ code, name: myName() || 'Player' });
     if (room.error || !(room.members || []).some((m) => m.client_id === me())) {
-      if (room.error === 'not_found' || room.error === 'expired') rememberCode('');
+      // A room that has expired, filled up or moved on without this device is
+      // not worth remembering.
+      rememberCode('');
+      if (!quiet) {
+        toast({
+          not_found: 'That room is gone',
+          expired: 'That room has expired',
+          in_progress: 'That draft started without you',
+          full: 'That room filled up',
+        }[room.error] || 'Could not rejoin that room');
+        ctx.back();
+      }
       return false;
     }
     await ctx.loadLeague(room.league);
     enterRoom(room);
     return true;
   } catch {
+    if (!quiet) toast('Could not reach that room');
     return false;
   }
 }
@@ -112,6 +149,16 @@ export function roomEntry(mode, shell) {
   // must not overwrite a choice made on the screen itself.
   CREATE.league = shell.state.league;
   createScreen();
+}
+
+/**
+ * Leaving a draft in progress costs the seat its remaining picks -- the room
+ * will auto-pick for it -- so it asks first.
+ */
+function confirmLeave() {
+  if (R.room && R.room.phase === 'draft'
+    && !window.confirm('Leave the draft? The room will pick for you from here.')) return;
+  leaveRoom();
 }
 
 const leaveRoom = () => {
@@ -507,6 +554,10 @@ function draftScreen() {
   const maxDPs = R.rules.maxDPs;
 
   render(`
+    <div class="between" style="margin-bottom:8px">
+      <div class="eyebrow">Room ${esc(room.code)} · ${esc(ctx.leagues[room.league].label)}</div>
+      <button class="btn ghost sm" id="leave">Leave</button>
+    </div>
     <div class="topbar">
       <div class="stat"><b>${st.round + 1}<span class="frac">/${SQUAD_SIZE}</span></b><span>Round</span></div>
       <div class="stat"><b>${squad.filter((s) => s.player).length}<span class="frac">/${SQUAD_SIZE}</span></b><span>Your squad</span></div>
@@ -534,6 +585,7 @@ function draftScreen() {
     : R.tab === 'squad' ? squadPane(squad)
       : roomPane()}</div>`);
 
+  on('#leave', 'click', confirmLeave);
   on('[data-group="tab"] .opt', 'click', (e) => {
     R.tab = e.currentTarget.dataset.val;
     draftScreen();
@@ -762,6 +814,10 @@ function coachScreen() {
   const waiting = R.room.members.filter((m) => !m.ready);
 
   render(`
+    <div class="between" style="margin-bottom:8px">
+      <div class="eyebrow">Room ${esc(R.code)}</div>
+      <button class="btn ghost sm" id="leave">Leave</button>
+    </div>
     <div style="margin-bottom:12px">
       <div class="eyebrow">Squad complete</div>
       <h2 style="font-size:20px">Appoint a head coach</h2>
@@ -786,6 +842,7 @@ function coachScreen() {
         </div>`).join('')}
     </div>`);
 
+  on('#leave', 'click', confirmLeave);
   on('[data-coach]', 'click', async (e) => {
     const id = e.currentTarget.dataset.coach;
     try {
