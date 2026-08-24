@@ -1,6 +1,6 @@
 # Road to 75
 
-**Live:** https://mls-road-to-75.netlify.app
+**Live:** https://kierdoyle.github.io/75points/
 
 Two leagues, both chasing **75 points**. Pick one on the setup screen; each
 ships its own player pool, coaches, calibration and playoff format.
@@ -10,9 +10,16 @@ livery — their blue (`#20b0e0`) and red (`#c02030`), sampled from the ASA
 banner. Every rating in the game comes from ASA's data. This is a fan project,
 not an ASA product.
 
-> Currently private — the "75 Points" Netlify team has team-wide site protection
-> on, so the URL asks for a Netlify sign-in. To open it up to everyone, set
-> **Team settings → Site protection** to public in the Netlify dashboard.
+### Where it is hosted
+
+| | URL | Notes |
+|---|---|---|
+| GitHub Pages | https://kierdoyle.github.io/75points/ | Free, no account limits. Deploys on every push to `main`. |
+| Netlify | https://75points.americansocceranalysis.com | Custom domain, but **deploys are blocked while the account is out of credits** — including prebuilt ones. |
+
+Pages is the mirror that always works; Netlify holds the nice domain. Both are
+driven from `main`, and the only difference between the two builds is the base
+path (see `vite.config.js`), because Pages serves from `/75points/`.
 
 A static, mobile-first MLS spin-team game in the spirit of the [7-0 World Cup game](https://7a0.com.br/en)
 and the 82-0 NBA game. Spin your way through every MLS team-season since 2013,
