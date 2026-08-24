@@ -107,7 +107,11 @@ export function roomEntry(mode, shell) {
   R.code = null;
   R.room = null;
   if (R.stop) { R.stop(); R.stop = null; }
-  if (mode === 'join') joinScreen(); else createScreen();
+  if (mode === 'join') { joinScreen(); return; }
+  // Seeded once, on the way in -- createScreen re-renders on every tap and
+  // must not overwrite a choice made on the screen itself.
+  CREATE.league = shell.state.league;
+  createScreen();
 }
 
 const leaveRoom = () => {
@@ -123,8 +127,24 @@ const leaveRoom = () => {
 
 const CREATE = { league: 'mls', difficulty: 'normal', formation: '4-3-3', conference: 'East', seconds: 60 };
 
+/**
+ * What a difficulty actually changes in a room.
+ *
+ * Not DIFFICULTIES[k].note, which leads on rerolls -- and rerolls do not exist
+ * here, because the board is shared. In the NWSL there is no public salary
+ * data either, so nothing is left but whether ratings are hidden, and saying
+ * so is better than implying a difference that is not there.
+ */
+function roomNote(key, league) {
+  const d = rulesFor(key, league);
+  const bits = [];
+  if (d.maxDPs !== Infinity) bits.push(`${d.maxDPs} DPs`);
+  if (d.salaryCap) bits.push('salary cap');
+  if (d.hideRatings) bits.push('ratings hidden');
+  return bits.length ? bits.join(' + ') : 'No limits';
+}
+
 function createScreen() {
-  CREATE.league = ctx.state.league;
   render(`
     <div class="between" style="margin-bottom:12px">
       <div><div class="eyebrow">Draft with friends</div>
@@ -149,14 +169,16 @@ function createScreen() {
         <div class="eyebrow">Difficulty</div>
         <div class="opts" style="margin-top:8px" data-group="difficulty">
           ${Object.keys(DIFFICULTIES).map((k) => {
-    const d = rulesFor(k, CREATE.league);
+    const d = DIFFICULTIES[k];
     return `<button class="opt" data-val="${k}" aria-pressed="${CREATE.difficulty === k}">
-              <b>${d.label}</b><span>${esc(d.note)}</span></button>`;
+              <b>${d.label}</b><span>${esc(roomNote(k, CREATE.league))}</span></button>`;
   }).join('')}
         </div>
         <p class="dim" style="font-size:11px;margin-top:8px">
           Rerolls do not apply in a room — the board is shared, so there is
-          nothing to reroll. Difficulty sets the DP limit and the salary cap.</p>
+          nothing to reroll.${CREATE.league === 'mls'
+    ? ' Difficulty sets the DP limit and the salary cap.'
+    : ' There is no public NWSL salary data, so only Max changes anything here: it hides the ratings.'}</p>
       </div>
       <div class="card">
         <div class="eyebrow">Seconds per pick</div>
@@ -916,7 +938,7 @@ function resultsScreen() {
           ${board.map((r, i) => `
             <tr class="${r.seat === mySeat() ? 'you' : ''}">
               <td>${i + 1}</td>
-              <td><b>${esc(r.club.name)}</b><div class="dim" style="font-size:10px">${esc(r.club.conf)}${r.coach ? ` · ${esc(r.coach.name)}` : ''}</div></td>
+              <td><b>${esc(r.club.name)}</b><div class="dim" style="font-size:10px">${LEAGUE.conferences ? `${esc(r.club.conf)}${r.coach ? ' · ' : ''}` : ''}${r.coach ? esc(r.coach.name) : ''}</div></td>
               <td class="mono">${r.strength > 0 ? '+' : ''}${r.strength.toFixed(1)}</td>
               <td class="mono">${r.record.w}-${r.record.d}-${r.record.l}</td>
               <td><b>${r.points}</b></td>

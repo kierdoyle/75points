@@ -70,6 +70,10 @@ async function loadLeague(key) {
   S.pool = loadPool(pool);
   S.sim = sim;
   S.loaded = key;
+  // The one place that knows which league is live. Screens that switch league
+  // without going through the setup screen -- joining a room, resuming one --
+  // depend on this rather than setting it themselves.
+  S.league = key;
   S.rosters = currentRosters(S.pool);
   configureLeague({
     key: sim.league, name: sim.name, games: sim.games, target: sim.target,

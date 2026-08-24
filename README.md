@@ -89,9 +89,13 @@ The shape of it:
   puts you back in your seat with your squad intact.
 
 Rerolls do not apply in a room: the board is shared, so there is nothing to
-reroll. Difficulty still sets the DP limit and the salary cap. Coaches are dealt
-three each off one shuffled list, so no two clubs in a room can appoint the same
-one.
+reroll. Difficulty still sets the DP limit and the salary cap — which means that
+in the NWSL, where there is no public salary data, only Max changes anything at
+all (it hides the ratings). Coaches are dealt three each off one shuffled list,
+so no two clubs in a room can appoint the same one.
+
+Both leagues run rooms. An NWSL room plays the single table and its straight
+knockout bracket, so everyone in the room meets home and away.
 
 Nothing about a room is stored beyond the code, the seed and the ordered list of
 picks — the squads, the coach shortlists and the entire season are *derived*
