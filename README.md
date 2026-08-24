@@ -77,6 +77,10 @@ The shape of it:
   enforced by a unique index in the database, not by the browser, so two people
   tapping the same name at the same instant resolve to exactly one owner and
   the loser is told immediately.
+* **The same slot-machine reveal.** Each round's club-season is spun up in
+  front of the whole room, not just whoever is on the clock, and the reel keeps
+  turning while the next board is being drawn so the wait reads as the machine
+  deciding rather than the game stalling.
 * **A clock on every pick** (30/60/120s, the host's choice). Run out and the
   best player left on the board is taken for you, into the best slot for it.
   A drafter who closes their tab is covered by the room three seconds later, so

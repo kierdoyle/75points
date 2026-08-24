@@ -189,6 +189,87 @@ export function coachCard(c, selectable, hidden = false) {
 }
 
 
+/**
+ * Slot-machine reveal: flick through random badges, then settle on the board.
+ *
+ * `spins` is the pool the decoy frames are drawn from -- any club-season will
+ * do, they are only there to be flicked past. `onSettle` runs once the answer
+ * is showing, which is where a caller re-enables whatever it disabled for the
+ * duration.
+ *
+ * The roster is expected to arrive with `.pending` on it, so it cannot paint
+ * the answer for a frame before the reel has started.
+ */
+export async function runReel(spin, spins, { onSettle } = {}) {
+  const reel = document.getElementById('reel');
+  const team = document.getElementById('reel-team');
+  const season = document.getElementById('reel-season');
+  if (!reel || !spin) return;
+  const box = reel.querySelector('.avatar');
+  const roster = app.querySelector('.roster');
+
+  // The reveal is decoration; the roster underneath is the game. Whatever
+  // happens above -- a missing element, a board that fails to render, a tab
+  // backgrounded mid-spin -- the roster gets shown and re-enabled, because a
+  // roster stuck at opacity 0 with pointer-events off is a player who cannot
+  // pick at all.
+  const reveal = () => {
+    reel.classList.remove('spinning');
+    roster?.classList.remove('pending');
+    if (onSettle) onSettle();
+  };
+
+  try {
+    reel.classList.add('spinning');
+
+    // Tapping the reel cuts it short for anyone who doesn't want to sit
+    // through it. Scoped per call, so a stale skip cannot kill the next one.
+    let skip = false;
+    reel.addEventListener('click', () => { skip = true; }, { once: true });
+
+    let delay = 50;
+    for (let i = 0; i < 14 && !skip; i++) {
+      const r = spins[Math.floor(Math.random() * spins.length)];
+      setAvatar(box, BADGE(r.teamId), r.team.abbr);
+      if (team) team.textContent = r.team.name;
+      if (season) season.textContent = r.season;
+      await wait(delay);
+      delay *= 1.16;
+    }
+    setAvatar(box, BADGE(spin.teamId), spin.team.abbr);
+    if (team) team.textContent = spin.team.name;
+    if (season) season.textContent = spin.season + (spin.projected ? ' (projected)' : '');
+  } finally {
+    reveal();
+  }
+}
+
+/**
+ * Keep the reel turning with no answer to land on.
+ *
+ * A draft room cannot know the next club until one of the clients has proposed
+ * it and the server has accepted, which is a round trip or two. Showing a
+ * spinning reel through that reads as the machine deciding, rather than as the
+ * game having stalled -- and when the board does arrive, runReel takes over and
+ * settles it.
+ *
+ * Stops on its own as soon as its element leaves the document, so a re-render
+ * can never leave two reels running.
+ */
+export async function idleReel(spins) {
+  const reel = document.getElementById('reel');
+  if (!reel || !spins || !spins.length) return;
+  const box = reel.querySelector('.avatar');
+  const team = document.getElementById('reel-team');
+  reel.classList.add('spinning');
+  while (document.getElementById('reel') === reel) {
+    const r = spins[Math.floor(Math.random() * spins.length)];
+    setAvatar(box, BADGE(r.teamId), r.team.abbr);
+    if (team) team.textContent = r.team.name;
+    await wait(110);
+  }
+}
+
 // Formatting shared by every screen that shows a rating or a salary.
 export const gplus = (v) => (v > 0 ? '+' : '') + v.toFixed(2);
 export const money = (n) => `$${(n / 1e6).toFixed(2)}M`;

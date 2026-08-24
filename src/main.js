@@ -23,7 +23,7 @@ import {
 import {
   app, render, toast, on, esc, wait, initials, shortName, avatar, mountAvatars,
   playerRow, pitchSlot, coachCard, BADGE, HEAD, ASA_SITE, ASA_LOGO, ASA_CREST,
-  gplus, money, moneyShort,
+  gplus, money, moneyShort, runReel,
 } from './ui.js';
 import { roomEntry, roomCard, roomResumeCard, resumeRoom } from './roomui.js';
 
@@ -494,7 +494,14 @@ function draftScreen(animate = false) {
   });
 
   if (S.tab === 'spin') {
-    if (animate) runReel(S.spin);
+    if (animate) {
+      runReel(S.spin, S.pool.spins, {
+        onSettle: () => {
+          const reroll = document.getElementById('reroll');
+          if (reroll) reroll.disabled = !S.rerolls;
+        },
+      });
+    }
     bindSpinPane();
   } else {
     bindSwap(() => draftScreen(false));
@@ -557,41 +564,6 @@ function spinPane(spin, animate = false) {
         <div class="group-label">${pos}</div>
         ${list.map((p) => playerRow(p, { hidden: hidden(), showSalary: S.rules.salaryCap })).join('')}`).join('')}
     </div>`;
-}
-
-/** Slot-machine reveal: flick through random badges, then settle on the spin. */
-async function runReel(spin) {
-  const reel = document.getElementById('reel');
-  const team = document.getElementById('reel-team');
-  const season = document.getElementById('reel-season');
-  if (!reel) return;
-  const box = reel.querySelector('.avatar');
-  // The roster ships already hidden (spinPane adds .pending when animating),
-  // so it can never paint the answer for a frame before the reel starts.
-  const roster = app.querySelector('.roster');
-  const reroll = document.getElementById('reroll');
-  reel.classList.add('spinning');
-
-  // Tapping the reel cuts the animation short for anyone who doesn't want to
-  // sit through it.
-  S.reelSkip = false;
-  reel.addEventListener('click', () => { S.reelSkip = true; }, { once: true });
-
-  let delay = 50;
-  for (let i = 0; i < 14 && !S.reelSkip; i++) {
-    const r = pick(S.pool.spins, Math.random);
-    setAvatar(box, BADGE(r.teamId), r.team.abbr);
-    team.textContent = r.team.name;
-    season.textContent = r.season;
-    await wait(delay);
-    delay *= 1.16;
-  }
-  reel.classList.remove('spinning');
-  setAvatar(box, BADGE(spin.teamId), spin.team.abbr);
-  team.textContent = spin.team.name;
-  season.textContent = spin.season + (spin.projected ? ' (projected)' : '');
-  roster?.classList.remove('pending');
-  if (reroll) reroll.disabled = !S.rerolls;
 }
 
 function bindSpinPane() {

@@ -24,7 +24,8 @@ import {
 import { clientId } from './supabase.js';
 import {
   app, render, toast, on, esc, wait, initials, shortName, avatar, mountAvatars,
-  playerRow, pitchSlot, coachCard, BADGE, HEAD, gplus, moneyShort,
+  playerRow, pitchSlot, coachCard, BADGE, HEAD, gplus, moneyShort, runReel,
+  idleReel,
 } from './ui.js';
 
 // Everything the room flow needs from the game shell, handed in rather than
@@ -37,6 +38,9 @@ const R = {
   // Set while a pick or a board proposal is in flight, so a double tap cannot
   // send two.
   busy: false, lastRendered: null,
+  // The round this client has already played the reveal for. A room re-renders
+  // on every pick, and the reel must not replay each time.
+  reeled: -1,
 };
 
 const me = () => clientId();
@@ -343,6 +347,7 @@ function enterRoom(room) {
   R.code = room.code;
   R.room = room;
   R.rules = rulesFor(room.difficulty, room.league);
+  R.reeled = -1;
   rememberCode(room.code);
   if (R.stop) R.stop();
   R.stop = watchRoom(room.code, onRoom, isMyTurn);
@@ -548,7 +553,13 @@ function draftScreen() {
   const st = R.state;
   const seat = mySeat();
   const squad = st.squads.get(seat);
-  const board = st.boards[st.round];
+  // Not st.boards[round] directly: the seat on the clock may be drafting from
+  // a replacement board, and everyone should be looking at what they are
+  // looking at. Deterministic, so every client resolves the same board. Until
+  // the round's shared board has been drawn there is nothing to resolve.
+  const board = st.boards[st.round]
+    ? boardForPick(ctx.state.pool, st, Number(room.seed)).board
+    : null;
   const onClockMember = st.members.find((m) => m.seat === st.onClock);
   const dps = countDPs(squad);
   const maxDPs = R.rules.maxDPs;
@@ -590,7 +601,20 @@ function draftScreen() {
     R.tab = e.currentTarget.dataset.val;
     draftScreen();
   });
-  if (R.tab === 'board') bindBoard(board, squad);
+  if (R.tab === 'board' && !board) idleReel(ctx.state.pool.spins);
+  if (R.tab === 'board') {
+    // Reveal a new board with the same slot machine the solo game uses --
+    // once per round, for everyone, not just whoever is on the clock. Tab
+    // switches and the re-render after every pick must not replay it.
+    if (board && R.reeled !== st.round) {
+      R.reeled = st.round;
+      runReel(board, ctx.state.pool.spins, {
+        onSettle: () => bindBoard(board, squad),
+      });
+    } else {
+      bindBoard(board, squad);
+    }
+  }
   tickClock();
 }
 
@@ -608,8 +632,16 @@ function orderStrip() {
 }
 
 function boardPane(board, squad) {
+  // No board yet: show the reel turning rather than a stalled-looking card.
   if (!board) {
-    return '<div class="card center"><b style="font-size:13px">Drawing the next club…</b></div>';
+    return `
+      <div class="reel spinning" id="reel">
+        <div class="avatar"></div>
+        <div>
+          <h2 id="reel-team">&nbsp;</h2>
+          <div class="season" id="reel-season">Drawing the next club…</div>
+        </div>
+      </div>`;
   }
   const roster = annotate(board.roster, squad, R.state.taken, R.rules);
   const order = ['GK', 'CB', 'FB', 'DM', 'CM', 'AM', 'W', 'ST'];
@@ -617,19 +649,20 @@ function boardPane(board, squad) {
     .filter(([, list]) => list.length);
   const canPick = isMyTurn();
 
+  const animate = R.reeled !== R.state.round;
   return `
-    <div class="reel">
+    <div class="reel" id="reel">
       ${avatar(BADGE(board.teamId), board.team.abbr)}
       <div>
-        <h2>${esc(board.team.name)}</h2>
-        <div class="season">${board.season}${board.projected ? ' (projected)' : ''}</div>
+        <h2 id="reel-team">${esc(board.team.name)}</h2>
+        <div class="season" id="reel-season">${board.season}${board.projected ? ' (projected)' : ''}</div>
       </div>
     </div>
     <div class="between" style="margin:14px 0 6px">
       <div class="eyebrow">${canPick ? 'Pick one player' : 'Everyone drafts from this club'}</div>
       <span class="dim" style="font-size:11.5px">${roster.filter((p) => !p.blocked).length} available to you</span>
     </div>
-    <div class="roster ${canPick ? '' : 'watching'}">
+    <div class="roster ${canPick ? '' : 'watching'}${animate ? ' pending' : ''}">
       ${groups.map(([pos, list]) => `
         <div class="group-label">${pos}</div>
         ${list.map((p) => playerRow(p, { hidden: hiddenRatings(), showSalary: R.rules.salaryCap })).join('')}`).join('')}
