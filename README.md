@@ -53,6 +53,44 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
 4. **Season** — your squad joins the 2026 league as an expansion side, plays 34
    games against the real current clubs, then the MLS Cup Playoffs.
 
+Or [draft against friends](#draft-rooms) in a room.
+
+## Draft rooms
+
+Up to eight people draft together in a room. Create one, read the four-letter
+code out, and everyone else joins with it — no accounts, no installs.
+
+The shape of it:
+
+* **One shared board a round.** Every round reveals a single club-season and
+  the whole room drafts from that one roster, in **snake order** (1-2-3, then
+  3-2-1). Everyone faces identical boards over the 14 rounds, so whoever comes
+  out on top genuinely out-drafted the room rather than out-spun it.
+* **A player taken is gone.** Room-wide, for the rest of the draft. That is
+  enforced by a unique index in the database, not by the browser, so two people
+  tapping the same name at the same instant resolve to exactly one owner and
+  the loser is told immediately.
+* **A clock on every pick** (30/60/120s, the host's choice). Run out and the
+  best player left on the board is taken for you, into the best slot for it.
+  A drafter who closes their tab is covered by the room three seconds later, so
+  one person wandering off never stalls everyone else.
+* **Everyone plays the same season.** All the drafted clubs enter the 2026
+  league at once and *play each other* — conference rivals home and away,
+  everyone else at least once. One table, one bracket, one Cup. The room screen
+  ranks all of you, and the head-to-heads are there to argue about.
+* **Reload-safe.** Refresh, switch apps, drop your phone — reopening the game
+  puts you back in your seat with your squad intact.
+
+Rerolls do not apply in a room: the board is shared, so there is nothing to
+reroll. Difficulty still sets the DP limit and the salary cap. Coaches are dealt
+three each off one shuffled list, so no two clubs in a room can appoint the same
+one.
+
+Nothing about a room is stored beyond the code, the seed and the ordered list of
+picks — the squads, the coach shortlists and the entire season are *derived*
+from those on each device. That is what lets every client simulate the same
+season without a server ever running it.
+
 ### Head coaches
 
 Every coach with enough league games — 30 in MLS, 20 in the NWSL's shorter
@@ -277,6 +315,31 @@ npm install
 npm run dev        # local dev server
 npm run build      # -> dist/
 npm run sanity     # headless calibration + 500-draft balance check
+npm run rooms      # headless multiplayer draft: exclusivity, snake, determinism
+```
+
+`npm run rooms` plays whole rooms with no server, against an in-memory stand-in
+for the room tables, and checks the three properties a shared draft lives on:
+nobody is drafted twice, every squad fills, and two clients holding the same
+room row compute the same season. Add `-- nwsl` for the other league.
+
+Draft rooms can also be played locally with **no database at all**: open
+`?mock&client=a` and `?mock&client=b` in two tabs and they draft against each
+other through `localStorage` (`src/roommock.js`, dev-only — it is compiled out
+of production builds).
+
+### Database
+
+Play logging and draft rooms share one Supabase project. The browser talks to
+it directly, with a publishable key that ships in the bundle and is granted
+nothing but EXECUTE on a handful of `SECURITY DEFINER` functions — every table
+is behind RLS with no policies, so there is no reachable surface but those.
+
+Run once each in the Supabase SQL editor:
+
+```
+supabase/schema.sql   # play logging
+supabase/rooms.sql    # draft rooms
 ```
 
 The Netlify project is connected to this repo through the Netlify GitHub App, so

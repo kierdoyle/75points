@@ -2,37 +2,15 @@
 //
 // No Netlify Function in the path, deliberately. A function would cost compute
 // and a web request per play against the Netlify credit budget; going direct
-// costs nothing there. supabase-js is skipped for the same reason -- it is
-// ~40 KB gzipped, which would undo much of what content-hashing the data files
-// just saved. This is one fetch against PostgREST.
-//
-// The publishable key below is public by design and ships in the bundle. It is
-// safe because the database grants it exactly one privilege: EXECUTE on
-// log_play(). It cannot read anything, and it cannot touch the tables
-// directly. See supabase/schema.sql.
+// costs nothing there. The endpoint, the key and the anonymous id are shared
+// with the draft rooms -- see supabase.js for why they are safe in a bundle.
 
-const URL = 'https://pjhprpvmzwqqkfdhavmp.supabase.co/rest/v1/rpc/log_play';
-const KEY = 'sb_publishable_OaQ2V_PP6rzek7iHPTw7BA_PVLsPkvf';
+import { clientId, rpcUrl, rpcHeaders } from './supabase.js';
 
-const CLIENT_KEY = 'r75:client';
+const URL = rpcUrl('log_play');
+
 const QUEUE_KEY = 'r75:logq';
 const MAX_QUEUED = 40;
-
-/** A stable anonymous id, so repeat players can be counted without anyone
- *  being identified. Nothing else about the player is stored. */
-function clientId() {
-  try {
-    let id = localStorage.getItem(CLIENT_KEY);
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem(CLIENT_KEY, id);
-    }
-    return id;
-  } catch {
-    // Private mode: still log, just without cross-session continuity.
-    return crypto.randomUUID();
-  }
-}
 
 const readQueue = () => {
   try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch { return []; }
@@ -53,11 +31,7 @@ async function post(payload) {
   const res = await fetch(URL, {
     method: 'POST',
     keepalive: true,
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: KEY,
-      Authorization: `Bearer ${KEY}`,
-    },
+    headers: rpcHeaders(),
     body: JSON.stringify({ payload }),
   });
   return res.ok;

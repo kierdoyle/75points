@@ -426,3 +426,84 @@ button.coach:active { transform: scale(.99); border-color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ------------------------------------------------------------ draft rooms */
+
+.card.room-card {
+  border-color: var(--gold);
+  background: linear-gradient(180deg, rgba(232,163,23,.10), transparent 65%), var(--card);
+}
+.card.you { border-color: var(--accent); }
+
+.opts.three { grid-template-columns: repeat(3, 1fr); }
+
+/* The code is the whole point of the lobby: make it unmissable and easy to
+   read out loud across a room. */
+.roomcode { text-align: center; }
+.codebig {
+  font-size: 44px; font-weight: 800; letter-spacing: .18em;
+  color: var(--accent); margin: 4px 0 6px; text-indent: .18em;
+}
+input.codein {
+  text-align: center; font-size: 28px; font-weight: 800; letter-spacing: .22em;
+  text-transform: uppercase; text-indent: .22em;
+}
+
+.seats { display: flex; flex-direction: column; gap: 6px; }
+.seatrow {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--card-2);
+}
+.seatrow.you { border-color: var(--accent); background: var(--accent-soft); }
+.seatno {
+  width: 20px; height: 20px; flex: none; border-radius: 6px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 11px; font-weight: 800; display: grid; place-items: center;
+}
+.seatname { flex: 1; font-size: 13px; font-weight: 700; min-width: 0; }
+
+/* Whose turn it is, with the clock draining across the top of the bar. */
+.turnbar {
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  background: var(--card); margin-bottom: 10px;
+}
+.turnbar.mine { border-color: var(--accent); background: var(--accent-soft); }
+.clockbar { height: 4px; background: var(--line); }
+.clockbar i { display: block; height: 100%; background: var(--accent); transition: width .25s linear; }
+.turnbar.mine .clockbar i { background: var(--gold); }
+
+.ordot {
+  display: inline-grid; place-items: center;
+  width: 19px; height: 19px; border-radius: 50%; margin-left: 3px;
+  background: var(--card-2); border: 1px solid var(--line);
+  font-size: 10px; font-weight: 800; color: var(--dim);
+}
+.ordot.now { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.ordot.done { opacity: .45; }
+
+/* Watching someone else pick: the board is readable but plainly not yours. */
+.roster.watching .pl { opacity: .72; pointer-events: none; }
+
+.pickrow {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 0; border-top: 1px solid var(--line); font-size: 12.5px;
+}
+.pickrow:first-of-type { border-top: 0; }
+.pickname { flex: 1; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.avatar.tiny { width: 20px; height: 20px; font-size: 8px; flex: none; }
+
+.minisquad { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.minip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 7px 3px 3px; border-radius: 20px;
+  background: var(--card-2); border: 1px solid var(--line);
+  font-size: 10.5px; font-weight: 600;
+}
+
+/* A match against another drafter is the one people will scroll back for. */
+.res.derby { border-color: var(--gold); background: linear-gradient(180deg, rgba(232,163,23,.09), transparent 60%), var(--card); }
+
+.roomtable td { vertical-align: middle; }
+.roomtable tr.you { background: var(--accent-soft); }

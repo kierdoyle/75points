@@ -20,104 +20,13 @@ import {
   todayKey, buildDaily, dailySimRng, boardReport, fieldDistribution, percentileOf,
   safeSlots,
 } from './daily.js';
+import {
+  app, render, toast, on, esc, wait, initials, shortName, avatar, mountAvatars,
+  playerRow, pitchSlot, coachCard, BADGE, HEAD, ASA_SITE, ASA_LOGO, ASA_CREST,
+  gplus, money, moneyShort,
+} from './ui.js';
+import { roomEntry, roomCard, resumeRoom } from './roomui.js';
 
-const app = document.getElementById('app');
-
-// ASA's public image buckets. Never bundled -- hotlinked, with a monogram
-// fallback for the occasional 404 (see avatar()/setAvatar()).
-const BADGE = (id) => `https://american-soccer-analysis-headshots.s3.amazonaws.com/club_logos/${id}.png`;
-const HEAD = (id) => `https://american-soccer-analysis-headshots.s3.us-east-1.amazonaws.com/player_headshots/${id}.png`;
-// American Soccer Analysis: the source of every rating in the game, and the
-// livery it borrows. Hotlinked like the badges and headshots.
-const ASA_SITE = 'https://www.americansocceranalysis.com/';
-const ASA_LOGO = 'https://images.squarespace-cdn.com/content/v1/5352fb7ce4b0bf79997bfc81/1435180609079-51SLX979FJ44N8A4R9PG/banner-03.png?format=750w';
-const ASA_CREST = 'https://images.squarespace-cdn.com/content/v1/5352fb7ce4b0bf79997bfc81/1519766680781-9RQ0CQXJH5H4JBRNBBQ3/asa-logo.png?format=300w';
-
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
-  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const initials = (name) => name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-
-// Particles that belong with the surname on the pitch label ("St. Clair",
-// "van der Water") rather than being stripped off with the given name.
-const PARTICLES = new Set(['st.', 'st', 'de', 'del', 'della', 'di', 'da', 'dos', 'du',
-  'van', 'von', 'der', 'den', 'la', 'le', 'mc', 'o', "o'"]);
-
-function shortName(name) {
-  const parts = name.split(/\s+/);
-  if (parts.length < 2) return name;
-  let i = parts.length - 1;
-  while (i > 1 && PARTICLES.has(parts[i - 1].toLowerCase())) i--;
-  return parts.slice(i).join(' ');
-}
-
-/**
- * Shrink the pitch label for long surnames. A name only wraps between words,
- * so a single long word ("Hollingshead") has to get smaller rather than break.
- */
-function nameSize(label) {
-  const longest = Math.max(...label.split(/\s+/).map((w) => w.length));
-  if (longest >= 12) return 'xlong';
-  if (longest >= 10) return 'long';
-  return '';
-}
-
-/**
- * Point an avatar at a new image. The monogram shows immediately and is only
- * replaced once the image loads, so a missing badge or headshot degrades to
- * initials rather than a broken-image icon. The sequence number stops a slow
- * earlier load from overwriting a later reel frame.
- */
-function setAvatar(node, url, fallback) {
-  const seq = String(Number(node.dataset.seq || 0) + 1);
-  node.dataset.seq = seq;
-  node.textContent = fallback;
-  let hue = 0;
-  for (const ch of fallback) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
-  node.style.background = `hsl(${hue} 32% 26%)`;
-  if (!url) return;
-  const img = new Image();
-  img.alt = '';
-  img.addEventListener('load', () => {
-    if (node.dataset.seq !== seq) return;
-    node.textContent = '';
-    node.appendChild(img);
-  });
-  img.addEventListener('error', () => { /* keep the monogram */ });
-  img.src = url;
-}
-
-function avatar(url, fallback, cls = '') {
-  let hue = 0;
-  for (const ch of fallback) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
-  const src = url ? ` data-img="${esc(url)}"` : '';
-  return `<div class="avatar ${cls}"${src} style="background:hsl(${hue} 32% 26%)">${esc(fallback)}</div>`;
-}
-
-function mountAvatars(root = app) {
-  root.querySelectorAll('.avatar[data-img]').forEach((node) => {
-    const url = node.dataset.img;
-    delete node.dataset.img;
-    setAvatar(node, url, node.textContent.trim());
-  });
-}
-
-function render(html, keepScroll = false) {
-  app.innerHTML = html;
-  mountAvatars();
-  if (!keepScroll) window.scrollTo({ top: 0 });
-}
-
-function toast(msg) {
-  document.querySelector('.toast')?.remove();
-  const t = document.createElement('div');
-  t.className = 'toast';
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 1800);
-}
-
-const on = (sel, ev, fn) => app.querySelectorAll(sel).forEach((n) => n.addEventListener(ev, fn));
 
 // ---------------------------------------------------------------- state
 
@@ -178,6 +87,9 @@ async function loadLeague(key) {
 async function boot() {
   await loadLeague(S.league);
   setupScreen();
+  // Back into whatever room this device was last drafting in -- a reload
+  // mid-draft should land on the board, not the menu.
+  resumeRoom(shell());
   // Anything a previous session could not deliver, after the game is up.
   flushQueue();
 }
@@ -197,6 +109,7 @@ function setupScreen() {
     </div>
     <div class="stack">
       ${dailyCard()}
+      ${roomCard()}
       <div class="card">
         <div class="eyebrow">League</div>
         <div class="opts two" style="margin-top:8px" data-group="league">
@@ -272,11 +185,27 @@ function setupScreen() {
     S.teamName = (document.getElementById('tname').value || '').trim() || 'Your Club FC';
     startDraft();
   });
+  on('.room-go', 'click', (e) => roomEntry(e.currentTarget.dataset.mode, shell()));
   on('.daily-go', 'click', (e) => {
     S.teamName = (document.getElementById('tname')?.value || '').trim() || S.teamName || 'Your Club FC';
     startDaily(e.currentTarget.dataset.league);
   });
 }
+
+/**
+ * What the multiplayer screens need from the game shell.
+ *
+ * Handed over rather than imported, so roomui.js never has to know how a
+ * league is loaded or configured -- and main.js keeps being the only place
+ * that touches S.
+ */
+const shell = () => ({
+  state: S,
+  leagues: LEAGUES,
+  loadLeague,
+  back: () => { S.daily = null; setupScreen(); },
+  dataVersion: (key) => dataVersion(LEAGUES[key].pool),
+});
 
 // ---------------------------------------------------------------- daily
 
@@ -520,10 +449,6 @@ function advanceDaily() {
 // Max mode drafts blind. Once the season is under way there is nothing left
 // to protect, so everything is revealed.
 const hidden = () => !!(S.rules && S.rules.hideRatings) && !S.season;
-const gplus = (v) => (v > 0 ? '+' : '') + v.toFixed(2);
-
-const money = (n) => `$${(n / 1e6).toFixed(2)}M`;
-const moneyShort = (n) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n / 1000)}k`);
 
 function draftScreen(animate = false) {
   const filled = S.squad.filter((s) => s.player).length;
@@ -618,30 +543,8 @@ function spinPane(spin, animate = false) {
     <div class="roster${animate ? ' pending' : ''}">
       ${groups.map(([pos, list]) => `
         <div class="group-label">${pos}</div>
-        ${list.map((p) => playerRow(p)).join('')}`).join('')}
+        ${list.map((p) => playerRow(p, { hidden: hidden(), showSalary: S.rules.salaryCap })).join('')}`).join('')}
     </div>`;
-}
-
-const sideTag = (p) => (p.side ? `<span class="pill side">${SIDE_LABEL[p.side]}</span>` : '');
-
-function playerRow(p) {
-  const cls = p.blocked ? 'blocked' : (p.score >= 0 ? 'pos-score' : 'neg-score');
-  return `
-    <button class="pl ${cls}" data-pid="${p.id}" ${p.blocked ? 'disabled' : ''}>
-      ${avatar(HEAD(p.id), initials(p.name), 'head round')}
-      <div class="who">
-        <div class="nm">${esc(p.name)}</div>
-        <div class="sub">
-          <span>${p.pos}</span>${sideTag(p)}
-          <span>·</span><span>${p.minutes.toLocaleString()}′</span>
-          ${S.rules.salaryCap ? `<span>· ${moneyShort(p.salary)}</span>` : ''}
-          ${p.dp ? '<span class="pill dp">DP</span>' : ''}
-          ${isVersatile(p) ? `<span class="pill versatile" title="${esc(p.positions.join(' / '))}">Versatile</span>` : ''}
-          ${p.blocked ? `<span class="pill">${esc(p.blocked)}</span>` : ''}
-        </div>
-      </div>
-      <div class="sc">${hidden() ? '<span class="dim">–</span>' : gplus(p.score)}<small>g+</small></div>
-    </button>`;
 }
 
 /** Slot-machine reveal: flick through random badges, then settle on the spin. */
@@ -775,33 +678,6 @@ async function commitPick(player, slot) {
 
 // ---------------------------------------------------------------- coach
 
-function coachCard(c, selectable) {
-  // Shown as a plain 0-100 percentile rank rather than the resulting boost.
-  const bar = (label, v) => `
-    <div class="crow">
-      <span class="clab">${label}</span>
-      <span class="cbar"><i style="width:${hidden() ? 100 : Math.max(3, v * 100)}%;
-        background:${hidden() ? 'var(--line)' : (v >= 0.5 ? 'var(--accent)' : 'var(--red)')}"></i></span>
-      <b class="mono ${v >= 0.5 ? 'up' : 'down'}">${hidden() ? '?' : Math.round(v * 100)}</b>
-    </div>`;
-  return `
-    <${selectable ? 'button' : 'div'} class="coach" ${selectable ? `data-coach="${c.id}"` : ''}>
-      <div class="chead">
-        ${avatar(BADGE(c.club), c.abbr)}
-        <div style="min-width:0">
-          <div class="cname">${esc(c.name)}</div>
-          <div class="dim" style="font-size:11px">${esc(c.abbr)} · ${c.span} · ${c.games} games</div>
-        </div>
-      </div>
-      ${bar('ATT', c.off)}
-      ${bar('DEF', c.def)}
-      ${(c.cups || c.shields) ? `<div class="cbadges">
-        ${c.cups ? '<span class="pill gold">🏆 Playoff Proven</span>' : ''}
-        ${c.shields ? '<span class="pill shield">🛡 Proven Winner</span>' : ''}
-      </div>` : ''}
-    </${selectable ? 'button' : 'div'}>`;
-}
-
 function coachScreen() {
   // Three names off the touchline; take one, or call for a different list.
   const all = [...S.sim.coaches];
@@ -827,7 +703,7 @@ function drawCoaches() {
         (attack) and against (defence), out of 100. A median coach changes
         nothing.</p>
     </div>
-    <div class="coaches">${S.coachOptions.map((c) => coachCard(c, true)).join('')}</div>
+    <div class="coaches">${S.coachOptions.map((c) => coachCard(c, true, hidden())).join('')}</div>
     <p class="dim center" style="font-size:11.5px;margin-top:10px">
       🏆 a ${esc(LEAGUE.cupName)} winner adds 2.5% in the playoffs · 🛡 a ${esc(LEAGUE.shieldName)} winner adds 2.5% in the league</p>`);
 
@@ -859,8 +735,8 @@ function squadPane(interactive = false) {
   const targets = from ? new Set(swapTargets(from, S.squad).map((s) => s.id)) : new Set();
 
   return `
-    <div class="pitch">${starters.map((s) => pitchSlot(s, false, interactive, from, targets)).join('')}</div>
-    <div class="bench">${subs.map((s) => pitchSlot(s, true, interactive, from, targets)).join('')}</div>
+    <div class="pitch">${starters.map((s) => pitchSlot(s, false, interactive, from, targets, hidden())).join('')}</div>
+    <div class="bench">${subs.map((s) => pitchSlot(s, true, interactive, from, targets, hidden())).join('')}</div>
     ${interactive ? `<p class="dim center swap-hint" style="font-size:11.5px;margin-top:10px">
       ${from ? 'Tap a highlighted player to swap — tap again to cancel'
     : 'Tap two players to swap their positions'}</p>` : ''}
@@ -870,34 +746,6 @@ function squadPane(interactive = false) {
       <div class="dim" style="font-size:12px;text-align:right">${S.formation} · ${filled}/${SQUAD_SIZE} filled<br>
         Starters 91% · subs 30% · after penalties</div>
     </div>`;
-}
-
-function pitchSlot(s, bench, interactive, from, targets) {
-  const style = bench ? '' : `style="left:${s.x}%;bottom:${s.y}%"`;
-  if (!s.player) {
-    return `<div class="slot empty" ${style}>
-      <div class="avatar round"></div><div class="lbl">${SLOT_LABEL[s.pos]}</div></div>`;
-  }
-  const p = s.player;
-  const fit = fitFor(p, s.pos);
-  const pen = fit && fit.penalty ? `<span class="pen">−${(fit.penalty * 100).toFixed(0)}%</span>` : '';
-  const eff = effectiveScore(p, s.pos);
-  const tip = hidden() ? `${p.name} · ${p.season}`
-    : `${p.name} · ${p.season} · ${gplus(eff)} g+`;
-  const cls = [
-    'slot',
-    s.justFilled ? 'filling' : '',
-    interactive ? 'tappable' : '',
-    from && from.id === s.id ? 'picked' : '',
-    from && targets.has(s.id) ? 'target' : '',
-    from && from.id !== s.id && !targets.has(s.id) ? 'faded' : '',
-  ].filter(Boolean).join(' ');
-  return `<div class="${cls}" ${style} data-slot="${s.id}" title="${esc(tip)}">
-    ${avatar(HEAD(p.id), initials(p.name), 'head round')}
-    <div class="lbl">${SLOT_LABEL[s.pos]}${pen}</div>
-    <div class="nm2 ${nameSize(shortName(p.name))}">${esc(shortName(p.name))}</div>
-    <div class="yr">${p.season}${hidden() ? '' : ` · ${gplus(eff)}`}</div>
-  </div>`;
 }
 
 /** A tap on any filled slot reports the player, their season and their value. */
@@ -957,7 +805,7 @@ function drawReview() {
     ${efficiencyCard()}
     ${S.rules.salaryCap ? capBar() : ''}
     <div id="pane">${squadPane(true)}</div>
-    ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}
+    ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false, hidden())}</div>` : ''}
     <button class="btn" id="play" style="margin-top:14px">Play the 2026 season →</button>
     <p class="dim center" style="font-size:11.5px;margin-top:8px">
       Last chance to rearrange. You need ${LEAGUE.target} points and the ${esc(LEAGUE.cupName)}.</p>`, true);
@@ -1313,7 +1161,7 @@ function endScreen() {
     ${efficiencyCard()}
     ${achievementsCard(r)}
     ${awardsCard(r.awards, 'Regular-season leaders')}
-    ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false)}</div>` : ''}
+    ${S.coach ? `<div style="margin-top:12px">${coachCard(S.coach, false, hidden())}</div>` : ''}
     <div style="margin-top:12px" id="finalsquad">${squadPane(false)}</div>
 
     <div class="card" style="margin-top:12px">

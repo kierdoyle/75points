@@ -113,7 +113,7 @@ function weightedPick(pool, key, rng, exclude) {
 }
 
 /** Who scored, who assisted, and when -- for one team's goals in a match. */
-function attribute(pool, goals, rng, tally) {
+export function attribute(pool, goals, rng, tally) {
   const out = [];
   for (let i = 0; i < goals; i++) {
     const minute = 1 + Math.floor(rng() * 90);
@@ -154,7 +154,7 @@ function poisson(lambda, rng) {
 export const COACH_SWING = 0.05;      // 1 + 0.05 * (pct - 0.5)  =>  0.975 .. 1.025
 export const TROPHY_BONUS = 0.025;    // Shield in the league, Cup in the playoffs
 
-const NEUTRAL = { atk: 1, def: 1 };
+export const NEUTRAL = { atk: 1, def: 1 };
 
 /**
  * A coach's multipliers for one phase of the season.
@@ -173,7 +173,7 @@ export function coachMods(coach, phase) {
   return { atk, def };
 }
 
-const modsFor = (club, phase) => (club && club.mods ? club.mods[phase] : NEUTRAL) || NEUTRAL;
+export const modsFor = (club, phase) => (club && club.mods ? club.mods[phase] : NEUTRAL) || NEUTRAL;
 
 /**
  * Simulate one match. Returns goals for the home and away side.
@@ -200,11 +200,11 @@ export function simShootout(spgA, spgB, rng) {
   return rng() < p; // true => A advances
 }
 
-const blankRecord = (club) => ({
+export const blankRecord = (club) => ({
   ...club, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0,
 });
 
-function applyResult(rec, gf, ga) {
+export function applyResult(rec, gf, ga) {
   rec.gf += gf; rec.ga += ga;
   if (gf > ga) { rec.w++; rec.pts += 3; } else if (gf === ga) { rec.d++; rec.pts++; } else rec.l++;
 }
@@ -316,8 +316,12 @@ export const conferenceNames = () => (LEAGUE.conferences ? ['East', 'West'] : ['
  */
 function goalsFor(club, n, rng, ctx) {
   if (!n) return [];
-  const pool = club.isUser ? ctx.squadPool : (ctx.oppPools || {})[club.id];
-  return attribute(pool, n, rng, club.isUser ? ctx.tally : null);
+  // A club may carry its own pool and tally (every club does in a draft room,
+  // where there is no single "the user"); otherwise fall back to the solo
+  // game's one squad against the league.
+  const pool = club.pool || (club.isUser ? ctx.squadPool : (ctx.oppPools || {})[club.id]);
+  const tally = club.tally || (club.isUser ? ctx.tally : null);
+  return attribute(pool, n, rng, tally);
 }
 
 /** Best-of-3 Round One. Drawn games go straight to a shootout, as in MLS. */
