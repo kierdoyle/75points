@@ -73,6 +73,8 @@ The shape of it:
   the whole room drafts from that one roster, in **snake order** (1-2-3, then
   3-2-1). Everyone faces identical boards over the 14 rounds, so whoever comes
   out on top genuinely out-drafted the room rather than out-spun it.
+* **The draft order is drawn at random** when the host starts, not taken from
+  the order people arrived in — otherwise the host would open every draft.
 * **A player taken is gone.** Room-wide, for the rest of the draft. That is
   enforced by a unique index in the database, not by the browser, so two people
   tapping the same name at the same instant resolve to exactly one owner and
@@ -85,10 +87,20 @@ The shape of it:
   best player left on the board is taken for you, into the best slot for it.
   A drafter who closes their tab is covered by the room three seconds later, so
   one person wandering off never stalls everyone else.
+* **A team talk before kickoff.** Once the draft ends everyone rearranges their
+  own XI — tap two players to swap them, same rules as the solo game — and
+  appoints a coach, then readies up. The season starts when the last person is
+  ready.
 * **Everyone plays the same season.** All the drafted clubs enter the 2026
   league at once and *play each other* — conference rivals home and away,
   everyone else at least once. One table, one bracket, one Cup. The room screen
   ranks all of you, and the head-to-heads are there to argue about.
+* **The regular season stops at the table.** Everyone watches their own 34
+  games, then the room lands on the full conference table with the golden boots
+  around it. The **host decides when the playoffs start**, so there is time to
+  gloat before the knockouts.
+* **The same end screen as the solo game** — final table, goal and assist
+  leaders, achievements, the shareable text and the PNG export card.
 * **Reload-safe.** Refresh, switch apps, drop your phone — the setup screen
   offers your room back, and rejoining restores your seat and squad intact. A
   shared `#room=` link goes straight in. Leaving is always one tap away, from
@@ -358,6 +370,11 @@ Run once each in the Supabase SQL editor:
 supabase/schema.sql   # play logging
 supabase/rooms.sql    # draft rooms
 ```
+
+`rooms.sql` is written to be re-runnable: it creates what is missing and
+migrates what is not (`add column if not exists`, and the phase constraint is
+dropped and re-added), so applying a newer copy over a live room database is
+safe.
 
 The Netlify project is connected to this repo through the Netlify GitHub App, so
 **pushing to `main` auto-deploys** (`npm run build` → `dist`). Pull requests get

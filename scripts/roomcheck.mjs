@@ -12,10 +12,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { rulesFor, SQUAD_SIZE, FORMATIONS } from '../src/rules.js';
+import { rulesFor, SQUAD_SIZE, FORMATIONS, swapTargets } from '../src/rules.js';
 import { loadPool, makeRng, currentRosters, spinKey } from '../src/pool.js';
 import { configureLeague, LEAGUE, squadStrength } from '../src/sim.js';
-import { seatOnClock, roundOf } from '../src/room.js';
+import { seatAt, positionOnClock, roundOf, draftOrder } from '../src/room.js';
 import {
   replay, proposeBoard, bestMove, coachShortlists, boardForPick,
 } from '../src/roomdraft.js';
@@ -66,9 +66,16 @@ function runDraft({ seats, seed, difficulty = 'normal', league = LEAGUE_KEY }) {
     });
   }
 
+  // A fixed shuffle per seed, so a run is reproducible but the first pick is
+  // not always seat 0.
+  const order = members.map((m) => m.seat);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
   const room = {
     code: 'TEST', league, difficulty, seed, phase: 'draft',
-    pick_no: 0, boards: [], members, picks: [], pick_seconds: 60,
+    pick_no: 0, boards: [], draft_order: order, members, picks: [], pick_seconds: 60,
   };
 
   const claimed = new Set();
@@ -87,7 +94,7 @@ function runDraft({ seats, seed, difficulty = 'normal', league = LEAGUE_KEY }) {
     }
 
     const fresh = replay(room, pool, rules);
-    const seat = seatOnClock(room.pick_no, seats);
+    const seat = seatAt(room, room.pick_no);
     if (seat !== fresh.onClock) throw new Error('turn order disagreement');
 
     const { board, personal } = boardForPick(pool, fresh, seed);
@@ -163,13 +170,29 @@ function main() {
     }
   }
 
+  // ------------------------------------------------------------ draft order
+  console.log('\ndraft order');
+  {
+    const firstSeat = [];
+    for (let n = 0; n < 40; n++) {
+      const { room } = runDraft({ seats: 4, seed: 900 + n * 17 });
+      firstSeat.push(room.picks[0].seat);
+    }
+    const distinct = new Set(firstSeat).size;
+    const hostOpened = firstSeat.filter((s) => s === 0).length;
+    check('the host does not open every draft', distinct > 1,
+      `${distinct} different seats picked first across 40 rooms`);
+    check('seat 0 opens roughly its share', hostOpened < 40 * 0.6,
+      `seat 0 picked first ${hostOpened}/40`);
+  }
+
   // ---------------------------------------------------------- snake fairness
   console.log('\nsnake order');
   for (const seats of [3, 5, 8]) {
     const counts = new Array(seats).fill(0);
     const firstOfRound = new Set();
     for (let p = 0; p < seats * SQUAD_SIZE; p++) {
-      const seat = seatOnClock(p, seats);
+      const seat = positionOnClock(p, seats);
       counts[seat]++;
       if (p % seats === 0) firstOfRound.add(seat);
     }
@@ -177,6 +200,49 @@ function main() {
       counts.every((c) => c === SQUAD_SIZE), counts.join(','));
     check(`${seats} seats: the first pick moves around`, firstOfRound.size > 1,
       `${firstOfRound.size} different seats picked first`);
+  }
+
+  // ------------------------------------------------------------ lineups
+  console.log('\npost-draft lineup changes');
+  {
+    const { room, rules } = runDraft({ seats: 3, seed: 8123 });
+    const base = replay(room, pool, rules);
+    const squad = base.squads.get(0);
+    const before = squadStrength(squad).total;
+    const ids = squad.filter((s) => s.player).map((s) => s.player.id).sort();
+
+    let swapped = null;
+    for (const a of squad.filter((s) => s.player)) {
+      for (const b of swapTargets(a, squad)) {
+        const t = squad.map((s) => ({ ...s }));
+        const A = t.find((s) => s.id === a.id);
+        const B = t.find((s) => s.id === b.id);
+        [A.player, B.player] = [B.player, A.player];
+        if (Math.abs(squadStrength(t).total - before) > 0.05) { swapped = t; break; }
+      }
+      if (swapped) break;
+    }
+    const lineup = Object.fromEntries(
+      swapped.filter((s) => s.player).map((s) => [s.id, s.player.id]),
+    );
+    const withLineup = (l) => replay(
+      { ...room, members: room.members.map((m) => (m.seat === 0 ? { ...m, lineup: l } : m)) },
+      pool, rules,
+    ).squads.get(0);
+
+    const after = withLineup(lineup);
+    check('a saved arrangement is replayed exactly',
+      Math.abs(squadStrength(after).total - squadStrength(swapped).total) < 1e-9);
+    check('rearranging keeps the same players',
+      JSON.stringify(after.filter((s) => s.player).map((s) => s.player.id).sort()) === JSON.stringify(ids));
+
+    // The arrangement is a permutation of the drafted squad and nothing more.
+    const cheat = { ...lineup };
+    cheat[Object.keys(cheat)[0]] = 'NOT_DRAFTED';
+    const guarded = withLineup(cheat);
+    check('a lineup naming an undrafted player is ignored',
+      JSON.stringify(guarded.filter((s) => s.player).map((s) => s.player.id).sort()) === JSON.stringify(ids)
+      && Math.abs(squadStrength(guarded).total - before) < 1e-9);
   }
 
   // ------------------------------------------------------------ determinism

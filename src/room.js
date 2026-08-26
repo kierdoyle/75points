@@ -18,12 +18,20 @@ export const createRoom = (opts) => call('create_room', { ...opts, client_id: cl
 export const joinRoom = (opts) => call('join_room', { ...opts, client_id: clientId() });
 export const updateMember = (opts) => call('update_member', { ...opts, client_id: clientId() });
 export const startDraft = (code) => call('start_draft', { code, client_id: clientId() });
+export const startPlayoffs = (code) => call('start_playoffs', { code, client_id: clientId() });
 export const setBoard = (code, round, spinKey) => call('set_board', { code, round, spin_key: spinKey });
 export const makePick = (opts) => call('make_pick', { ...opts, client_id: clientId() });
 export const fetchRoom = (code) => rpc('get_room', { p_code: code });
 
-/** Whose seat is on the clock. Snake order: odd rounds run backwards. */
-export function seatOnClock(pickNo, seats) {
+/**
+ * Which *position* in the draft order is on the clock. Snake order, so odd
+ * rounds run backwards and nobody compounds an early pick over 14 rounds.
+ *
+ * A position is not a seat: seats are handed out in join order, so using them
+ * directly would give the host first pick of every draft. draftOrder() is the
+ * shuffle in between.
+ */
+export function positionOnClock(pickNo, seats) {
   const round = Math.floor(pickNo / seats);
   const idx = pickNo % seats;
   return round % 2 === 0 ? idx : seats - 1 - idx;
@@ -31,10 +39,30 @@ export function seatOnClock(pickNo, seats) {
 
 export const roundOf = (pickNo, seats) => Math.floor(pickNo / seats);
 
-/** The order seats pick in for one round, for the on-deck strip. */
-export function roundOrder(round, seats) {
-  const order = [...Array(seats).keys()];
-  return round % 2 === 0 ? order : order.reverse();
+/**
+ * Seats in the order they draft.
+ *
+ * The server shuffles this when the draft starts. Rooms opened before that
+ * existed, and lobbies that have not started yet, fall back to seat order.
+ */
+export function draftOrder(room) {
+  const seats = (room.members || []).length;
+  const order = room.draft_order;
+  if (Array.isArray(order) && order.length === seats) return order;
+  return [...Array(seats).keys()];
+}
+
+/** The seat on the clock at a given pick number. */
+export function seatAt(room, pickNo) {
+  const order = draftOrder(room);
+  if (!order.length) return 0;
+  return order[positionOnClock(pickNo, order.length)];
+}
+
+/** The seats picking in one round, in order. */
+export function roundOrder(room, round) {
+  const order = draftOrder(room);
+  return round % 2 === 0 ? order : [...order].reverse();
 }
 
 /**

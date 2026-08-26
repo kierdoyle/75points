@@ -9,14 +9,16 @@
 
 import {
   SQUAD_SIZE, SLOT_LABEL, FORMATIONS, DIFFICULTIES, rulesFor, countDPs,
-  openSlotsFor, effectiveScore, blockReason, budget, SALARY_CAP,
+  openSlotsFor, effectiveScore, blockReason, budget, SALARY_CAP, swapTargets,
 } from './rules.js';
 import { makeRng, spinKey, currentRosters, annotate } from './pool.js';
 import { LEAGUE, squadStrength } from './sim.js';
 import { simRoom, roomLeaderboard } from './roomsim.js';
+import { achievements } from './achievements.js';
+import { buildCard } from './exportcard.js';
 import {
   MAX_SEATS, createRoom, joinRoom, updateMember, startDraft, setBoard, makePick,
-  watchRoom, clockLeft, roundOrder,
+  watchRoom, clockLeft, startPlayoffs, draftOrder,
 } from './room.js';
 import {
   replay, proposeBoard, boardForPick, bestMove, coachShortlists,
@@ -37,7 +39,7 @@ const R = {
   tab: 'board', sim: null, speed: 1, skip: false, ticking: false,
   // Set while a pick or a board proposal is in flight, so a double tap cannot
   // send two.
-  busy: false, lastRendered: null,
+  busy: false, lastRendered: null, stage: null, swapFrom: null, achievements: null,
   // The round this client has already played the reveal for. A room re-renders
   // on every pick, and the reel must not replay each time.
   reeled: -1,
@@ -348,6 +350,8 @@ function enterRoom(room) {
   R.room = room;
   R.rules = rulesFor(room.difficulty, room.league);
   R.reeled = -1;
+  R.stage = null;
+  R.sim = null;
   rememberCode(room.code);
   if (R.stop) R.stop();
   R.stop = watchRoom(room.code, onRoom, isMyTurn);
@@ -380,8 +384,12 @@ function onRoom(room, skew) {
   if (!changed) return;
   if (room.phase === 'lobby') lobbyScreen();
   else if (room.phase === 'draft') draftScreen();
-  else if (room.phase === 'coach') coachScreen();
-  else if (room.phase === 'season' && !R.ticking) seasonScreen();
+  else if (room.phase === 'coach') reviewScreen();
+  // A run in progress owns the screen: re-rendering mid-ticker would restart
+  // it. `stage` keeps a finished regular season on the standings rather than
+  // replaying it when the next poll lands.
+  else if (room.phase === 'season' && !R.ticking && R.stage !== 'standings') seasonScreen();
+  else if (room.phase === 'playoffs' && !R.ticking && R.stage !== 'results') playoffScreen();
 }
 
 /**
@@ -505,7 +513,8 @@ function lobbyScreen() {
         <p class="dim" style="font-size:11.5px;margin-top:4px">Pick your formation while you wait.</p>
       </div>`}
     <p class="dim center" style="font-size:11px;margin-top:10px">
-      14 rounds · one shared club-season a round · ${room.pick_seconds}s a pick</p>`);
+      14 rounds · one shared club-season a round · ${room.pick_seconds}s a pick<br>
+      The draft order is drawn at random when the host starts.</p>`);
 
   on('#leave', 'click', leaveRoom);
   on('#copycode', 'click', () => copy(room.code, 'Code copied'));
@@ -576,6 +585,15 @@ function draftScreen() {
       <div class="stat"><b style="color:${dps >= maxDPs ? 'var(--dp)' : 'var(--text)'}">${dps}<span class="frac">/${maxDPs === Infinity ? '∞' : maxDPs}</span></b><span>DPs</span></div>
     </div>
 
+    <div class="card" style="margin-bottom:10px;padding:8px 10px">
+      <div class="between">
+        <span class="eyebrow">Draft order</span>
+        <span class="dim" style="font-size:11px">${draftOrder(room).map((seat, i) => {
+    const m = st.members.find((x) => x.seat === seat);
+    return `${i ? ' · ' : ''}${esc(m ? m.name : `Seat ${seat + 1}`)}`;
+  }).join('')}</span>
+      </div>
+    </div>
     <div class="turnbar ${isMyTurn() ? 'mine' : ''}" id="turnbar">
       <div class="clockbar"><i id="clockfill" style="width:0%"></i></div>
       <div class="between" style="padding:8px 10px">
@@ -621,7 +639,7 @@ function draftScreen() {
 /** Who picks next, in this round's order. */
 function orderStrip() {
   const st = R.state;
-  const order = roundOrder(st.round, st.seats);
+  const order = st.roundSeats;
   const idx = order.indexOf(st.onClock);
   return order.map((s, i) => {
     const m = st.members.find((x) => x.seat === s);
@@ -838,13 +856,25 @@ function roomPane() {
   </div>`;
 }
 
-// ---------------------------------------------------------------- coach
+// ---------------------------------------------------------------- review
 
-function coachScreen() {
-  const seat = mySeat();
+/**
+ * Between the draft and the season: rearrange the XI, appoint a coach, ready up.
+ *
+ * The arrangement has to be shared, not kept locally, because every client
+ * simulates every club -- a swap only this device knew about would give each
+ * person a different season. It is sent as {slot: player} and re-applied over
+ * the pick list on the other side, so it can only ever reorder a squad, never
+ * change who is in it.
+ */
+function reviewScreen() {
   const mine = myMember();
+  const seat = mySeat();
+  const squad = R.state.squads.get(seat);
   const shortlist = coachShortlists(ctx.state.sim.coaches, R.state.seats, Number(R.room.seed)).get(seat) || [];
   const waiting = R.room.members.filter((m) => !m.ready);
+  const { total } = squadStrength(squad);
+  const coach = currentCoach();
 
   render(`
     <div class="between" style="margin-bottom:8px">
@@ -853,19 +883,40 @@ function coachScreen() {
     </div>
     <div style="margin-bottom:12px">
       <div class="eyebrow">Squad complete</div>
-      <h2 style="font-size:20px">Appoint a head coach</h2>
+      <h2 style="font-size:20px">Pick your XI</h2>
       <p class="muted" style="font-size:13px;margin-top:8px">
-        Three names off the touchline, yours alone — no two clubs in the room
-        are offered the same coach. Ratings are career percentile ranks.</p>
+        Tap two players to swap them. Anyone who can play the other's position
+        is fair game — move someone out of their natural role and they lose
+        a fifth of their g+.</p>
     </div>
-    ${mine?.ready ? `
-      <div class="card center">
+
+    <div class="between card" style="margin-bottom:10px">
+      <div><div class="eyebrow">Squad g+</div>
+        <b class="mono" style="font-size:19px">${(total > 0 ? '+' : '') + total.toFixed(1)}</b></div>
+      <div class="dim" style="font-size:12px;text-align:right">${esc(mine?.formation || '')}<br>
+        Starters 91% · subs 30%</div>
+    </div>
+
+    <div id="pane">${pitchPane(squad, !mine?.ready)}</div>
+
+    <div style="margin-top:14px">
+      <div class="eyebrow" style="margin-bottom:8px">Head coach</div>
+      ${mine?.ready
+    ? (coach ? coachCard(coach, false) : '')
+    : `<p class="dim" style="font-size:11.5px;margin-bottom:8px">
+         Three names, yours alone — no two clubs in the room are offered the same one.</p>
+       <div class="coaches">${shortlist.map((c) => coachCard(c, true)).join('')}</div>`}
+    </div>
+
+    ${mine?.ready
+    ? `<div class="card center" style="margin-top:14px">
         <b style="font-size:14px">You are ready</b>
         <p class="dim" style="font-size:11.5px;margin-top:6px">
           ${waiting.length ? `Waiting for ${esc(waiting.map((m) => m.name).join(', '))}` : 'Kicking off…'}</p>
-      </div>
-      <div style="margin-top:12px">${coachCard(currentCoach(), false)}</div>`
-    : `<div class="coaches">${shortlist.map((c) => coachCard(c, true)).join('')}</div>`}
+        <button class="btn ghost sm" id="unready" style="margin-top:10px">Change my mind</button>
+      </div>`
+    : ''}
+
     <div class="card" style="margin-top:12px">
       <div class="eyebrow" style="margin-bottom:8px">Room</div>
       ${R.room.members.map((m) => `
@@ -876,11 +927,64 @@ function coachScreen() {
     </div>`);
 
   on('#leave', 'click', confirmLeave);
+  if (!mine?.ready) bindRoomSwap(squad);
   on('[data-coach]', 'click', async (e) => {
     const id = e.currentTarget.dataset.coach;
     try {
-      onRoom(await updateMember({ code: R.code, coach_id: id, ready: true }), R.skew);
+      onRoom(await updateMember({
+        code: R.code, coach_id: id, ready: true, lineup: lineupOf(squad),
+      }), R.skew);
     } catch { toast('Could not save that'); }
+  });
+  on('#unready', 'click', async () => {
+    try { onRoom(await updateMember({ code: R.code, ready: false }), R.skew); }
+    catch { toast('Could not save that'); }
+  });
+}
+
+/** The squad as {slot_id: player_id}, which is all the server keeps of it. */
+const lineupOf = (squad) => Object.fromEntries(
+  squad.filter((s) => s.player).map((s) => [s.id, s.player.id]),
+);
+
+function pitchPane(squad, interactive) {
+  const starters = squad.filter((s) => s.starter);
+  const subs = squad.filter((s) => !s.starter);
+  const from = R.swapFrom ? squad.find((s) => s.id === R.swapFrom) : null;
+  const targets = from ? new Set(swapTargets(from, squad).map((s) => s.id)) : new Set();
+  return `
+    <div class="pitch">${starters.map((s) => pitchSlot(s, false, interactive, from, targets)).join('')}</div>
+    <div class="bench">${subs.map((s) => pitchSlot(s, true, interactive, from, targets)).join('')}</div>
+    ${interactive ? `<p class="dim center" style="font-size:11.5px;margin-top:10px">
+      ${from ? 'Tap a highlighted player to swap — tap again to cancel'
+    : 'Tap two players to swap their positions'}</p>` : ''}`;
+}
+
+/** Tap one player then another to swap, when each can play the other's slot. */
+function bindRoomSwap(squad) {
+  const rerender = () => {
+    document.getElementById('pane').innerHTML = pitchPane(squad, true);
+    mountAvatars(document.getElementById('pane'));
+    bindRoomSwap(squad);
+  };
+  on('#pane .slot[data-slot]', 'click', (e) => {
+    const id = e.currentTarget.dataset.slot;
+    const slot = squad.find((x) => x.id === id);
+    if (slot?.player) {
+      toast(`${shortName(slot.player.name)} · ${slot.player.season} · ${gplus(effectiveScore(slot.player, slot.pos))} g+`);
+    }
+    if (!R.swapFrom) { R.swapFrom = id; rerender(); return; }
+    if (R.swapFrom === id) { R.swapFrom = null; rerender(); return; }
+    const a = squad.find((x) => x.id === R.swapFrom);
+    const b = slot;
+    if (!swapTargets(a, squad).some((x) => x.id === id)) { R.swapFrom = id; rerender(); return; }
+    const before = squadStrength(squad).total;
+    [a.player, b.player] = [b.player, a.player];
+    const after = squadStrength(squad).total;
+    R.swapFrom = null;
+    rerender();
+    const d = after - before;
+    toast(`Swapped · squad g+ ${d >= 0 ? '+' : ''}${d.toFixed(2)}`);
   });
 }
 
@@ -889,18 +993,16 @@ const currentCoach = () => ctx.state.sim.coaches.find((c) => c.id === myMember()
 // ---------------------------------------------------------------- season
 
 /**
- * Run the room's season.
+ * Run the room's season, once.
  *
  * Every client computes this locally from the shared seed and the shared
- * picks, so nothing has to be uploaded and everyone still sees the same
- * results, the same table and the same Cup.
+ * picks, so nothing is uploaded and everyone still sees the same results, the
+ * same table and the same Cup. The playoffs are simulated here too, at the
+ * same time -- the host only controls *when* the room watches them, which
+ * keeps the whole season one deterministic run rather than two.
  */
-function seasonScreen() {
-  R.ticking = true;
-  // Everything from here is computed locally from the seed and the picks, so
-  // the room no longer needs polling -- and the draft is over, so nothing can
-  // change on the server anyway.
-  if (R.stop) { R.stop(); R.stop = null; }
+function ensureSim() {
+  if (R.sim) return R.sim;
   const st = R.state;
   const members = st.members.map((m) => ({
     seat: m.seat,
@@ -909,17 +1011,21 @@ function seasonScreen() {
     conference: LEAGUE.conferences ? (m.conference || 'East') : 'League',
     coach: ctx.state.sim.coaches.find((c) => c.id === m.coach_id) || null,
   }));
-
   R.sim = simRoom({
     members,
     opponents: ctx.state.sim.opponents,
     rosters: ctx.state.rosters || currentRosters(ctx.state.pool),
     rng: makeRng((Number(R.room.seed) ^ 0xabcd) >>> 0),
   });
+  return R.sim;
+}
 
-  R.speed = 1;
-  R.skip = false;
-  const mine = R.sim.bySeat.get(mySeat());
+const myResult = () => ensureSim().bySeat.get(mySeat());
+
+function seasonScreen() {
+  R.ticking = true;
+  R.stage = 'ticker';
+  const mine = myResult();
 
   render(`
     <div class="between" style="margin-bottom:10px">
@@ -941,6 +1047,8 @@ function seasonScreen() {
     </div>
     <div class="ticker" id="ticker"></div>`);
 
+  R.speed = 1;
+  R.skip = false;
   on('#speed', 'click', (e) => {
     R.speed = R.speed === 1 ? 2 : R.speed === 2 ? 4 : 1;
     e.currentTarget.textContent = `▶ ${R.speed}×`;
@@ -957,6 +1065,7 @@ async function runTicker(mine) {
   const tick = document.getElementById('tick');
 
   for (const r of mine.results) {
+    if (!document.getElementById('ticker')) return; // left the room mid-run
     const row = document.createElement('div');
     row.innerHTML = matchCard(r);
     const card = row.firstElementChild;
@@ -971,8 +1080,9 @@ async function runTicker(mine) {
     tick.style.left = `${(r.matchday / LEAGUE.games) * 100}%`;
     if (!R.skip) await wait((700 + r.scorers.length * 180) / R.speed);
   }
-  await wait(500);
-  resultsScreen();
+  await wait(400);
+  R.ticking = false;
+  standingsScreen();
 }
 
 function matchCard(r) {
@@ -1000,20 +1110,245 @@ function matchCard(r) {
     </div>`;
 }
 
-// ---------------------------------------------------------------- results
+// ---------------------------------------------------------- final standings
 
-function resultsScreen() {
-  R.ticking = false;
-  const board = roomLeaderboard(R.sim);
-  const mine = R.sim.bySeat.get(mySeat());
-  const champ = R.sim.champion;
-  const winner = board[0];
+/** Goal and assist leaders, from the player's own squad. */
+function awardsCard(awards, title = 'Season leaders') {
+  if (!awards.scorers.length && !awards.assisters.length) return '';
+  const list = (rows, key) => (rows.length ? rows.map((t, i) => `
+      <div class="lead ${i === 0 ? 'top' : ''}">
+        <span class="rank">${i + 1}</span>
+        <span class="lname">${esc(t.name)}</span>
+        <span class="dim" style="font-size:10px">${t.pos}</span>
+        <b class="mono">${t[key]}</b>
+      </div>`).join('') : '<div class="dim" style="font-size:12px">None</div>');
+  return `
+    <div class="card" style="margin-top:12px">
+      <div class="eyebrow" style="margin-bottom:8px">${esc(title)}</div>
+      <div class="leadgrid">
+        <div><div class="dim" style="font-size:11px;margin-bottom:4px">Goals</div>
+          ${list(awards.scorers, 'goals')}</div>
+        <div><div class="dim" style="font-size:11px;margin-bottom:4px">Assists</div>
+          ${list(awards.assisters, 'assists')}</div>
+      </div>
+    </div>`;
+}
+
+/** The full table, with every club in the room marked. */
+function leagueTable(conf) {
+  const rows = R.sim.standings[conf] || [];
+  const seatOf = new Map([...R.sim.bySeat].map(([seat, r]) => [r.club.id, seat]));
+  return `
+    <div class="card">
+      <table class="table">
+        <thead><tr><th>#</th><th>Club</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr></thead>
+        <tbody>
+          ${rows.map((t, i) => {
+    const seat = seatOf.get(t.id);
+    const isMine = seat === mySeat();
+    return `<tr class="${isMine ? 'you' : ''} ${i === 8 ? 'cut' : ''}">
+              <td>${t.seed}</td>
+              <td><div class="tm">${avatar(seat === undefined ? BADGE(t.id) : '', t.abbr)}
+                <span>${esc(seat === undefined ? t.short : t.name)}${seat !== undefined && !isMine ? ' <span class="pill">room</span>' : ''}</span></div></td>
+              <td>${t.w}</td><td>${t.d}</td><td>${t.l}</td>
+              <td>${t.gf - t.ga > 0 ? '+' : ''}${t.gf - t.ga}</td>
+              <td><b>${t.pts}</b></td>
+            </tr>`;
+  }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function standingsScreen() {
+  R.stage = 'standings';
+  const mine = myResult();
+  const conf = mine.club.conf;
+  const others = [...R.sim.bySeat.entries()].filter(([seat]) => seat !== mySeat());
 
   render(`
-    <div class="verdict ${mine.won ? 'win' : mine.wonCup ? 'win' : 'lose'}">
+    <div class="eyebrow">Regular season complete</div>
+    <h2 style="font-size:20px;margin-bottom:10px">
+      ${LEAGUE.conferences ? `${esc(conf)}ern Conference` : `${esc(LEAGUE.name)} table`}</h2>
+    ${leagueTable(conf)}
+    <p class="dim center" style="font-size:11px;margin-top:8px">Gold line = playoff cut (top 8)</p>
+
+    <div class="card" style="margin-top:12px">
+      <div class="eyebrow" style="margin-bottom:8px">The room after ${LEAGUE.games} games</div>
+      ${roomLeaderboard(R.sim).map((r, i) => `
+        <div class="pickrow">
+          <span class="dim mono" style="font-size:10px">${i + 1}</span>
+          <span class="pickname">${esc(r.club.name)}${r.seat === mySeat() ? ' (you)' : ''}</span>
+          <span class="dim" style="font-size:11px">${r.madePlayoffs ? `#${r.seed} seed` : 'missed out'}</span>
+          <b class="mono">${r.points}</b>
+        </div>`).join('')}
+    </div>
+
+    ${awardsCard(mine.awards, 'Your season leaders')}
+    ${others.length ? `<div class="card" style="margin-top:12px">
+      <div class="eyebrow" style="margin-bottom:8px">Golden boots around the room</div>
+      ${others.map(([seat, r]) => {
+    const top = r.awards.scorers[0];
+    return `<div class="pickrow">
+          <span class="pickname">${esc(r.club.name)}</span>
+          <span class="dim" style="font-size:11px">${top ? esc(shortName(top.name)) : '—'}</span>
+          <b class="mono">${top ? top.goals : 0}</b>
+        </div>`;
+  }).join('')}
+    </div>` : ''}
+
+    ${isHost()
+    ? `<button class="btn" id="toplayoffs" style="margin-top:14px">Start the playoffs →</button>`
+    : `<div class="card center" style="margin-top:14px">
+        <b style="font-size:13px">Waiting for the host to start the playoffs</b>
+        <p class="dim" style="font-size:11.5px;margin-top:4px">
+          ${mine.madePlayoffs ? `You are in as the #${mine.seed} seed.` : 'You did not make it — but you can still watch.'}</p>
+      </div>`}`);
+
+  on('#toplayoffs', 'click', async (e) => {
+    e.currentTarget.disabled = true;
+    e.currentTarget.textContent = 'Starting…';
+    try { onRoom(await startPlayoffs(R.code), R.skew); }
+    catch { toast('Could not start the playoffs'); standingsScreen(); }
+  });
+}
+
+// ---------------------------------------------------------------- playoffs
+
+function playoffScreen() {
+  R.ticking = true;
+  R.stage = 'bracket';
+  R.speed = 1;
+  R.skip = false;
+  render(`
+    <div class="eyebrow">${esc(LEAGUE.cupName)} Playoffs</div>
+    <h2 style="font-size:20px;margin-bottom:10px">The bracket</h2>
+    <div class="controls">
+      <button class="btn ghost sm" id="speed">▶ 1×</button>
+      <button class="btn ghost sm" id="skip">Skip to end ⏭</button>
+    </div>
+    <div class="bracket" id="bracket"></div>
+    <div id="after"></div>`);
+  on('#speed', 'click', (e) => {
+    R.speed = R.speed === 1 ? 2 : R.speed === 2 ? 4 : 1;
+    e.currentTarget.textContent = `▶ ${R.speed}×`;
+  });
+  on('#skip', 'click', () => { R.skip = true; });
+  runBracket();
+}
+
+async function runBracket() {
+  const sim = ensureSim();
+  const bracket = document.getElementById('bracket');
+  // Every tie a room club was in, plus the final whatever happened.
+  const ties = sim.playoffs.rounds.filter((t) => [t.high, t.low, t.host, t.away]
+    .some((c) => c && c.isMember));
+  const cup = sim.playoffs.rounds[sim.playoffs.rounds.length - 1];
+  if (!ties.includes(cup)) ties.push(cup);
+
+  for (const t of ties) {
+    if (!document.getElementById('bracket')) return;
+    const box = document.createElement('div');
+    box.innerHTML = tieCard(t);
+    const card = box.firstElementChild;
+    bracket.appendChild(card);
+    mountAvatars(card);
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (!R.skip) await wait(1400 / R.speed);
+  }
+  R.ticking = false;
+  const after = document.getElementById('after');
+  if (!after) return;
+  after.innerHTML = '<button class="btn" id="go" style="margin-top:14px">Final verdict →</button>';
+  after.querySelector('#go').addEventListener('click', resultsScreen);
+}
+
+/** One playoff tie, with the goals in it. */
+function tieCard(t) {
+  const name = (c) => (c.isMember ? c.name : c.short);
+  const mineId = R.sim.bySeat.get(mySeat())?.club.id;
+  const isMine = (c) => c && c.id === mineId;
+  const goals = (list, ours) => (list || []).map((g) => `
+    <div class="goal ${ours ? 'ours' : 'theirs'}">
+      <span class="min">${g.minute}'</span>
+      <span class="who2">${g.scorer ? esc(shortName(g.scorer)) : '—'}</span>
+      ${g.assister ? `<span class="ast">${esc(shortName(g.assister))}</span>` : ''}
+    </div>`).join('');
+  const seedOf = (c) => (c.seed ? (t.conf === 'Cup' ? `${String(c.conf)[0]}${c.seed}` : `#${c.seed}`) : '');
+  const side = (c, lost) => `<div class="side ${lost ? 'lost' : ''}">
+      ${avatar(c.isMember ? '' : BADGE(c.id), c.abbr)}
+      <span>${esc(name(c))}</span><span class="dim" style="font-size:10px">${seedOf(c)}</span>
+    </div>`;
+  const head = `<div class="eyebrow" style="margin-bottom:4px">${esc(t.round)}${
+    LEAGUE.conferences && t.conf && t.conf !== 'Cup' ? ` · ${esc(t.conf)}` : ''}</div>`;
+  const involved = [t.high, t.low, t.host, t.away].some(isMine);
+
+  if (t.games) {
+    const loser = t.winner === t.high ? t.low : t.high;
+    const [a, b] = t.series.split('-').map(Number);
+    const legs = t.games.map((g, i) => `
+      <div class="leg">
+        <div class="leg-head">Game ${i + 1} · ${g.highHosts ? esc(t.high.abbr) : esc(t.low.abbr)}
+          <b class="mono">${g.highGoals}–${g.lowGoals}</b>${g.pens ? ' <span class="dim">(pens)</span>' : ''}</div>
+        ${goals(g.highScorers, isMine(t.high))}
+        ${goals(g.lowScorers, isMine(t.low))}
+      </div>`).join('');
+    return `<div class="tie ${involved ? 'you' : ''}">
+      <div class="tie-top"><div>${head}${side(t.winner, false)}${side(loser, true)}</div>
+        <div class="meta">${Math.max(a, b)}–${Math.min(a, b)}<br>series</div></div>
+      <div class="legs">${legs}</div></div>`;
+  }
+  const loser = t.winner === t.host ? t.away : t.host;
+  const wg = t.winner === t.host ? t.hg : t.ag;
+  const lg = t.winner === t.host ? t.ag : t.hg;
+  const lines = goals(t.hostScorers, isMine(t.host)) + goals(t.awayScorers, isMine(t.away));
+  return `<div class="tie ${involved ? 'you' : ''}">
+    <div class="tie-top"><div>${head}${side(t.winner, false)}${side(loser, true)}</div>
+      <div class="meta">${wg}–${lg}<br>${t.pens ? 'on pens' : `at ${esc(t.host.abbr)}`}</div></div>
+    ${lines ? `<div class="legs"><div class="leg">${lines}</div></div>` : ''}
+  </div>`;
+}
+
+// ---------------------------------------------------------------- results
+
+/** Shaped like the solo game's season, so the PNG card and the achievement
+ *  rules can be reused unchanged. */
+function seasonLike(mine) {
+  const champ = R.sim.champion;
+  return {
+    userRecord: mine.record,
+    madePlayoffs: mine.madePlayoffs,
+    seed: mine.seed,
+    won: mine.won,
+    wonCup: mine.wonCup,
+    points: mine.points,
+    strength: mine.strength,
+    results: mine.results,
+    awards: mine.awards,
+    playoffs: { champion: { short: champ.isMember ? champ.name : champ.short } },
+  };
+}
+
+function resultsScreen() {
+  R.stage = 'results';
+  R.ticking = false;
+  // The draft is long over and the season is derived, so there is nothing left
+  // on the server worth asking about.
+  if (R.stop) { R.stop(); R.stop = null; }
+
+  const board = roomLeaderboard(R.sim);
+  const mine = myResult();
+  const champ = R.sim.champion;
+  const winner = board[0];
+  const squad = R.state.squads.get(mySeat());
+  R.achievements = achievements(seasonLike(mine), squad);
+
+  render(`
+    <div class="verdict ${mine.won || mine.wonCup ? 'win' : 'lose'}">
       <div class="eyebrow">Room ${esc(R.code)} · 2026</div>
       <div class="big mono">${mine.points}</div>
-      <h2>${mine.won ? 'IMMORTAL' : (winner.seat === mySeat() ? 'Best in the room' : `${esc(winner.club.name)} took it`)}</h2>
+      <h2>${mine.won ? 'IMMORTAL'
+    : (winner.seat === mySeat() ? 'Best in the room' : `${esc(winner.club.name)} took it`)}</h2>
       <p class="muted" style="margin-top:8px;font-size:13px">
         ${mine.record.w}W–${mine.record.d}D–${mine.record.l}L ·
         ${mine.madePlayoffs ? `#${mine.seed} seed` : 'missed the playoffs'} ·
@@ -1028,7 +1363,8 @@ function resultsScreen() {
           ${board.map((r, i) => `
             <tr class="${r.seat === mySeat() ? 'you' : ''}">
               <td>${i + 1}</td>
-              <td><b>${esc(r.club.name)}</b><div class="dim" style="font-size:10px">${LEAGUE.conferences ? `${esc(r.club.conf)}${r.coach ? ' · ' : ''}` : ''}${r.coach ? esc(r.coach.name) : ''}</div></td>
+              <td><b>${esc(r.club.name)}</b><div class="dim" style="font-size:10px">${
+  LEAGUE.conferences ? `${esc(r.club.conf)}${r.coach ? ' · ' : ''}` : ''}${r.coach ? esc(r.coach.name) : ''}</div></td>
               <td class="mono">${r.strength > 0 ? '+' : ''}${r.strength.toFixed(1)}</td>
               <td class="mono">${r.record.w}-${r.record.d}-${r.record.l}</td>
               <td><b>${r.points}</b></td>
@@ -1040,30 +1376,87 @@ function resultsScreen() {
         👑 = ${LEAGUE.target} points and the ${esc(LEAGUE.cupName)}</p>
     </div>
 
+    ${achievementsCard()}
     ${headToHeadCard()}
-    ${bracketCard()}
+    ${leagueTableCard()}
+    ${awardsCard(mine.awards, 'Your regular-season leaders')}
+    ${mine.coach ? `<div style="margin-top:12px">${coachCard(mine.coach, false)}</div>` : ''}
+    <div style="margin-top:12px" id="finalsquad">${pitchPane(squad, false)}</div>
 
     <div class="card" style="margin-top:12px">
       <div class="eyebrow" style="margin-bottom:8px">Share</div>
       <div class="share">${esc(shareText())}</div>
       <button class="btn sm" id="copy" style="width:100%;margin-top:12px">Copy result</button>
+      <button class="btn ghost sm" id="png" style="width:100%;margin-top:8px">⬇ Export as PNG</button>
     </div>
-    <div style="margin-top:12px">${squadPane(R.state.squads.get(mySeat()))}</div>
     <button class="btn ghost" id="again" style="margin-top:12px">Back to the menu</button>`);
 
   on('#copy', 'click', () => copy(shareText(), 'Copied!'));
   on('#again', 'click', leaveRoom);
+  on('#finalsquad .slot[data-slot]', 'click', (e) => {
+    const s = squad.find((x) => x.id === e.currentTarget.dataset.slot);
+    if (s?.player) toast(`${shortName(s.player.name)} · ${s.player.season} · ${gplus(effectiveScore(s.player, s.pos))} g+`);
+  });
+  on('#png', 'click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = 'Rendering…';
+    try {
+      const blob = await buildCard({
+        season: seasonLike(mine),
+        squad,
+        teamName: mine.club.name,
+        difficulty: `${DIFFICULTIES[R.room.difficulty].label} · room`,
+        coach: mine.coach,
+        achievements: R.achievements || [],
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `road-to-${LEAGUE.target}-${mine.club.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      toast('Saved');
+    } catch {
+      toast('Export failed');
+    }
+    btn.disabled = false;
+    btn.textContent = was;
+  });
+}
+
+function achievementsCard() {
+  const list = R.achievements || [];
+  if (!list.length) return '';
+  return `
+    <div class="card" style="margin-top:12px">
+      <div class="eyebrow" style="margin-bottom:9px">Achievements · ${list.length}</div>
+      <div class="achs">
+        ${list.map((a) => `
+          <div class="ach ${a.tier}">
+            <b>${esc(a.name)}</b><span>${esc(a.note)}</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+/** The final table, collapsed behind a toggle so it does not dominate. */
+function leagueTableCard() {
+  const conf = myResult().club.conf;
+  return `
+    <details class="card" style="margin-top:12px">
+      <summary class="eyebrow" style="cursor:pointer">
+        Final ${LEAGUE.conferences ? `${esc(conf)}ern Conference` : esc(LEAGUE.name)} table</summary>
+      <div style="margin-top:10px">${leagueTable(conf)}</div>
+    </details>`;
 }
 
 /** Who beat whom, among the room. */
 function headToHeadCard() {
-  const rows = [];
-  for (const [seat, r] of R.sim.bySeat) {
-    if (seat !== mySeat()) continue;
-    for (const g of r.results) {
-      if (g.opp.isMember) rows.push(g);
-    }
-  }
+  const rows = myResult().results.filter((g) => g.opp.isMember);
   if (!rows.length) return '';
   return `
     <div class="card" style="margin-top:12px">
@@ -1077,49 +1470,20 @@ function headToHeadCard() {
     </div>`;
 }
 
-/** The ties that had a room club in them, plus the final. */
-function bracketCard() {
-  const rounds = R.sim.playoffs.rounds.filter((t) => [t.high, t.low, t.host, t.away]
-    .some((c) => c && c.isMember));
-  const cup = R.sim.playoffs.rounds[R.sim.playoffs.rounds.length - 1];
-  if (!rounds.includes(cup)) rounds.push(cup);
-  if (!rounds.length) return '';
-  const name = (c) => (c.isMember ? c.name : c.short);
-  // The full round names crowd out the clubs on a phone, and the clubs are
-  // the part worth reading.
-  const shortRound = (r) => r
-    .replace('Conference Semifinal', 'Conf Semi')
-    .replace('Conference Final', 'Conf Final')
-    .replace('Round One', 'Round 1')
-    .replace('Quarterfinal', 'Quarter')
-    .replace('Semifinal', 'Semi');
-  return `
-    <div class="card" style="margin-top:12px">
-      <div class="eyebrow" style="margin-bottom:8px">Playoffs</div>
-      ${rounds.map((t) => {
-    const a = t.high || t.host;
-    const b = t.low || t.away;
-    const score = t.series ? `${t.series} series` : `${t.hg}–${t.ag}${t.pens ? ' (pens)' : ''}`;
-    return `<div class="pickrow">
-          <span class="dim" style="font-size:10.5px;flex:none">${esc(shortRound(t.round))}</span>
-          <span class="pickname">${esc(name(t.winner))} <span class="dim">beat</span> ${esc(name(t.winner === a ? b : a))}</span>
-          <span class="dim mono" style="font-size:11px">${esc(score)}</span>
-        </div>`;
-  }).join('')}
-    </div>`;
-}
-
 function shareText() {
   const board = roomLeaderboard(R.sim);
-  const mine = R.sim.bySeat.get(mySeat());
+  const mine = myResult();
   const place = board.findIndex((r) => r.seat === mySeat()) + 1;
   const marks = mine.results.map((x) => ({ W: '🟩', D: '🟨', L: '🟥' }[x.result]));
+  const top = mine.awards.allScorers[0];
   return [
     `Road to ${LEAGUE.target} ⚽ Room draft · ${LEAGUE.name} · ${board.length} drafters`,
     `${place}${['st', 'nd', 'rd'][place - 1] || 'th'} of ${board.length} · ${mine.points} pts`
       + (mine.wonCup ? ` · 🏆 ${LEAGUE.cupName}` : '') + (mine.won ? ' · IMMORTAL 👑' : ''),
     marks.slice(0, 17).join(''),
     marks.slice(17).join(''),
+    top ? `⚽ ${shortName(top.name)} ${top.goals}` : '',
+    (R.achievements || []).length ? `🏅 ${R.achievements.slice(0, 3).map((a) => a.name).join(' · ')}` : '',
     window.location.origin + window.location.pathname,
   ].filter(Boolean).join('\n');
 }

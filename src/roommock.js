@@ -19,9 +19,15 @@ const ROUNDS = 14;
 const load = () => { try { return JSON.parse(localStorage.getItem(DB_KEY) || '{}'); } catch { return {}; } };
 const save = (db) => localStorage.setItem(DB_KEY, JSON.stringify(db));
 
-const seatOnClock = (pickNo, seats) => (Math.floor(pickNo / seats) % 2 === 0
+const positionOnClock = (pickNo, seats) => (Math.floor(pickNo / seats) % 2 === 0
   ? pickNo % seats
   : seats - 1 - (pickNo % seats));
+
+const seatAt = (room, pickNo) => {
+  const order = room.draft_order && room.draft_order.length === room.members.length
+    ? room.draft_order : room.members.map((m) => m.seat);
+  return order[positionOnClock(pickNo, order.length)];
+};
 
 function view(room) {
   if (!room) return { error: 'not_found' };
@@ -49,13 +55,14 @@ const handlers = {
       phase: 'lobby',
       pick_no: 0,
       boards: [],
+      draft_order: null,
       pick_seconds: payload.pick_seconds || 60,
       data_version: payload.data_version || null,
       turn_started_at: null,
       members: [{
         seat: 0, client_id: payload.client_id, name: (payload.name || 'Host').slice(0, 20),
         formation: payload.formation || null, conference: payload.conference || null,
-        coach_id: null, ready: false,
+        coach_id: null, ready: false, lineup: null,
       }],
       picks: [],
     };
@@ -75,7 +82,7 @@ const handlers = {
     room.members.push({
       seat, client_id: payload.client_id, name: (payload.name || 'Player').slice(0, 20),
       formation: payload.formation || null, conference: payload.conference || null,
-      coach_id: null, ready: false,
+      coach_id: null, ready: false, lineup: null,
     });
     save(db);
     return view(room);
@@ -87,7 +94,7 @@ const handlers = {
     if (!room) return { error: 'not_found' };
     const m = room.members.find((x) => x.client_id === payload.client_id);
     if (!m) return { error: 'not_seated' };
-    for (const k of ['name', 'formation', 'conference', 'coach_id']) {
+    for (const k of ['name', 'formation', 'conference', 'coach_id', 'lineup']) {
       if (payload[k] != null) m[k] = payload[k];
     }
     if (payload.ready != null) m.ready = payload.ready;
@@ -104,6 +111,13 @@ const handlers = {
     if (room.phase !== 'lobby') return view(room);
     if (room.members.some((m) => !m.formation)) return { error: 'not_everyone_ready' };
     room.phase = 'draft';
+    // Shuffled here, as the server does, so the host does not open every draft.
+    const order = room.members.map((m) => m.seat);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    room.draft_order = order;
     room.turn_started_at = new Date().toISOString();
     save(db);
     return view(room);
@@ -128,7 +142,7 @@ const handlers = {
     if (payload.pick_no != null && payload.pick_no !== room.pick_no) return view(room);
 
     const seats = room.members.length;
-    const seat = seatOnClock(room.pick_no, seats);
+    const seat = seatAt(room, room.pick_no);
     const owner = room.members.find((m) => m.seat === seat);
     const expired = room.turn_started_at
       && Date.now() > Date.parse(room.turn_started_at) + room.pick_seconds * 1000;
@@ -147,6 +161,15 @@ const handlers = {
     room.turn_started_at = new Date().toISOString();
     if (room.pick_no >= seats * ROUNDS) room.phase = 'coach';
     save(db);
+    return view(room);
+  },
+
+  start_playoffs({ payload }) {
+    const db = load();
+    const room = db[(payload.code || '').toUpperCase()];
+    if (!room) return { error: 'not_found' };
+    if (room.host_client !== payload.client_id) return { error: 'not_host' };
+    if (room.phase === 'season') { room.phase = 'playoffs'; save(db); }
     return view(room);
   },
 

@@ -41,12 +41,16 @@ create table if not exists public.rooms (
   -- without the season ever being sent anywhere.
   seed            bigint not null,
   phase           text not null default 'lobby'
-                    check (phase in ('lobby', 'draft', 'coach', 'season')),
+                    check (phase in ('lobby', 'draft', 'coach', 'season', 'playoffs')),
   -- Global pick counter, 0-based. Everything about whose turn it is derives
   -- from this and the seat count -- see seat_on_clock().
   pick_no         int not null default 0 check (pick_no >= 0),
   -- boards[i] is the club-season ('teamId|season') drafted in round i+1.
   boards          text[] not null default '{}',
+  -- Seats in the order they pick, shuffled when the draft starts. Without it
+  -- seat 0 -- always the host, since seats are handed out on arrival -- would
+  -- open every single draft.
+  draft_order     int[],
   pick_seconds    int not null default 60 check (pick_seconds between 15 and 300),
   -- Which pool file the room drafted from. A room is only coherent against
   -- the data it started on, so a client on a different build is turned away
@@ -66,8 +70,12 @@ create table if not exists public.room_members (
   formation   text check (length(formation) <= 12),
   conference  text check (conference in ('East', 'West', 'League')),
   coach_id    text check (length(coach_id) <= 32),
-  -- Set once a member has locked in a coach and is waiting on the room.
+  -- Set once a member has locked in their XI and coach and is waiting on the
+  -- room.
   ready       boolean not null default false,
+  -- {slot_id: player_id} for a squad that has been rearranged after the draft.
+  -- Only the arrangement is stored; who was drafted is still the pick list.
+  lineup      jsonb,
   seen_at     timestamptz not null default now(),
   primary key (code, seat),
   unique (code, client_id)
@@ -99,6 +107,14 @@ create table if not exists public.room_picks (
 
 create index if not exists rooms_expiry_idx on public.rooms (expires_at);
 
+-- Migrations, so this file can be re-run over an earlier install.
+alter table public.rooms        add column if not exists draft_order int[];
+alter table public.room_members add column if not exists lineup jsonb;
+alter table public.room_picks   add column if not exists board_key text;
+alter table public.rooms        drop constraint if exists rooms_phase_check;
+alter table public.rooms        add  constraint rooms_phase_check
+  check (phase in ('lobby', 'draft', 'coach', 'season', 'playoffs'));
+
 -- ---------------------------------------------------------------- lockdown
 
 alter table public.rooms        enable row level security;
@@ -112,10 +128,14 @@ revoke all on public.room_picks   from anon, authenticated;
 -- ---------------------------------------------------------------- helpers
 
 /**
- * Which seat is on the clock, given a pick number and a seat count.
+ * Which *position* in the draft order is on the clock.
  *
  * Snake order: 0,1,2 then 2,1,0 then 0,1,2. Odd rounds run backwards, which
- * is what stops the first seat compounding its advantage over 14 rounds.
+ * is what stops whoever picks first compounding that advantage over 14 rounds.
+ *
+ * A position is not a seat. Seats are handed out in join order, so mapping
+ * straight to them would hand the host the first pick of every draft; the
+ * room's draft_order is the shuffle in between.
  */
 create or replace function public.seat_on_clock(p_pick_no int, p_seats int)
 returns int
@@ -170,6 +190,7 @@ begin
     'phase', v_room.phase,
     'pick_no', v_room.pick_no,
     'boards', to_jsonb(v_room.boards),
+    'draft_order', to_jsonb(v_room.draft_order),
     'pick_seconds', v_room.pick_seconds,
     'data_version', v_room.data_version,
     'host_client', v_room.host_client,
@@ -179,7 +200,7 @@ begin
       select jsonb_agg(jsonb_build_object(
         'seat', m.seat, 'client_id', m.client_id, 'name', m.name,
         'formation', m.formation, 'conference', m.conference,
-        'coach_id', m.coach_id, 'ready', m.ready
+        'coach_id', m.coach_id, 'ready', m.ready, 'lineup', m.lineup
       ) order by m.seat)
       from public.room_members m where m.code = v_room.code
     ), '[]'::jsonb),
@@ -323,6 +344,7 @@ begin
     formation  = coalesce(payload->>'formation', formation),
     conference = coalesce(payload->>'conference', conference),
     coach_id   = coalesce(payload->>'coach_id', coach_id),
+    lineup     = coalesce(payload->'lineup', lineup),
     ready      = coalesce((payload->>'ready')::boolean, ready),
     seen_at    = now()
   where code = v_code and client_id = v_client;
@@ -354,6 +376,7 @@ declare
   v_code   text := upper(payload->>'code');
   v_client uuid := (payload->>'client_id')::uuid;
   v_room   public.rooms;
+  v_order  int[];
 begin
   select * into v_room from public.rooms where code = v_code for update;
   if not found then
@@ -370,8 +393,16 @@ begin
     return jsonb_build_object('error', 'not_everyone_ready');
   end if;
 
+  -- The shuffle happens here rather than at creation because the room is only
+  -- now closed: everyone who is going to draft has arrived.
+  select array_agg(seat order by random())
+    into v_order
+    from public.room_members
+   where code = v_code;
+
   update public.rooms
      set phase = 'draft', turn_started_at = now(), updated_at = now(),
+         draft_order = v_order,
          expires_at = now() + interval '12 hours'
    where code = v_code;
 
@@ -435,6 +466,7 @@ declare
   v_expect  int  := (payload->>'pick_no')::int;
   v_room    public.rooms;
   v_seats   int;
+  v_pos     int;
   v_seat    int;
   v_owner   uuid;
   v_expired boolean;
@@ -455,7 +487,15 @@ begin
   end if;
 
   select count(*) into v_seats from public.room_members where code = v_code;
-  v_seat := public.seat_on_clock(v_room.pick_no, v_seats);
+  v_pos := public.seat_on_clock(v_room.pick_no, v_seats);
+  -- Position through the shuffle to a seat. Rooms opened before draft_order
+  -- existed fall back to seat order.
+  if v_room.draft_order is not null
+     and coalesce(array_length(v_room.draft_order, 1), 0) = v_seats then
+    v_seat := v_room.draft_order[v_pos + 1];
+  else
+    v_seat := v_pos;
+  end if;
   select client_id into v_owner
     from public.room_members where code = v_code and seat = v_seat;
 
@@ -491,6 +531,39 @@ begin
 end;
 $$;
 
+/**
+ * Host sends the room from the finished regular season into the playoffs.
+ *
+ * The bracket is already decided -- every client derived it from the seed the
+ * moment the draft ended -- so this settles *when* everyone watches it, not
+ * what happens. It exists so a room can sit on the final table and argue about
+ * it before anyone starts the knockouts.
+ */
+create or replace function public.start_playoffs(payload jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_code   text := upper(payload->>'code');
+  v_client uuid := (payload->>'client_id')::uuid;
+  v_room   public.rooms;
+begin
+  select * into v_room from public.rooms where code = v_code for update;
+  if not found then
+    return jsonb_build_object('error', 'not_found');
+  end if;
+  if v_room.host_client <> v_client then
+    return jsonb_build_object('error', 'not_host');
+  end if;
+  if v_room.phase = 'season' then
+    update public.rooms set phase = 'playoffs', updated_at = now() where code = v_code;
+  end if;
+  return public.get_room(v_code);
+end;
+$$;
+
 -- ---------------------------------------------------------------- grants
 
 revoke all on function public.create_room(jsonb)   from public;
@@ -499,6 +572,7 @@ revoke all on function public.update_member(jsonb) from public;
 revoke all on function public.start_draft(jsonb)   from public;
 revoke all on function public.set_board(jsonb)     from public;
 revoke all on function public.make_pick(jsonb)     from public;
+revoke all on function public.start_playoffs(jsonb) from public;
 revoke all on function public.get_room(text)       from public;
 
 grant execute on function public.create_room(jsonb)   to anon;
@@ -507,4 +581,5 @@ grant execute on function public.update_member(jsonb) to anon;
 grant execute on function public.start_draft(jsonb)   to anon;
 grant execute on function public.set_board(jsonb)     to anon;
 grant execute on function public.make_pick(jsonb)     to anon;
+grant execute on function public.start_playoffs(jsonb) to anon;
 grant execute on function public.get_room(text)       to anon;

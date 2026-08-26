@@ -16,7 +16,7 @@ import {
   makeSquad, blockReason, openSlotsFor, effectiveScore, countDPs, SQUAD_SIZE,
 } from './rules.js';
 import { makeRng, spinKey, drawSpin } from './pool.js';
-import { seatOnClock, roundOf, roundOrder } from './room.js';
+import { seatAt, roundOf, roundOrder, draftOrder } from './room.js';
 import { STARTER_WEIGHT, SUB_WEIGHT } from './sim.js';
 
 /** A pick that could not be made: recorded so pick numbering stays even. */
@@ -87,11 +87,32 @@ export function replay(room, pool, rules) {
     });
   }
 
+  // A squad rearranged after the draft. Only the arrangement moved -- the same
+  // players are in it -- so this is applied as a permutation over the slots
+  // rather than trusted as a squad in its own right.
+  for (const m of members) {
+    if (!m.lineup) continue;
+    const squad = squads.get(m.seat);
+    const drafted = new Map(squad.filter((s) => s.player).map((s) => [s.player.id, s.player]));
+    const wanted = Object.entries(m.lineup)
+      .filter(([slotId, pid]) => squad.some((s) => s.id === slotId) && drafted.has(pid));
+    // Every drafted player must still appear exactly once, or the arrangement
+    // is ignored and the drafted one stands.
+    const ids = wanted.map(([, pid]) => pid);
+    if (ids.length !== drafted.size || new Set(ids).size !== ids.length) continue;
+    for (const slot of squad) slot.player = null;
+    for (const [slotId, pid] of wanted) {
+      const slot = squad.find((s) => s.id === slotId);
+      slot.player = drafted.get(pid);
+    }
+  }
+
   const seen = new Set(room.boards || []);
   for (const pick of room.picks || []) if (pick.board_key) seen.add(pick.board_key);
 
   const seats = members.length;
   const pickNo = room.pick_no || 0;
+  const round = seats ? roundOf(pickNo, seats) : 0;
   return {
     members,
     seen,
@@ -101,8 +122,10 @@ export function replay(room, pool, rules) {
     taken,
     bySeat,
     pickNo,
-    round: seats ? roundOf(pickNo, seats) : 0,
-    onClock: seats ? seatOnClock(pickNo, seats) : 0,
+    round,
+    order: draftOrder(room),
+    roundSeats: seats ? roundOrder(room, round) : [],
+    onClock: seats ? seatAt(room, pickNo) : 0,
     rules,
   };
 }
@@ -156,9 +179,9 @@ export function boardFeasible(roster, seatsToPick, squads, taken, rules) {
  * A club-season is never repeated, so nobody drafts the same team twice.
  */
 export function proposeBoard(pool, state, round, seed) {
-  const { seats, squads, taken, rules } = state;
+  const { squads, taken, rules } = state;
   const used = new Set(state.boards.filter(Boolean).map(spinKey));
-  const order = roundOrder(round, seats);
+  const order = state.roundSeats;
   const rng = makeRng((seed ^ (round * 0x9e3779b1)) >>> 0);
 
   const fresh = pool.spins.filter((s) => !used.has(spinKey(s)));
