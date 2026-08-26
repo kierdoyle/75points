@@ -272,6 +272,7 @@ function createScreen() {
         conference: LEAGUE.conferences ? CREATE.conference : 'League',
         data_version: ctx.dataVersion(CREATE.league),
       });
+      if (!schemaCurrent(room)) { outOfDate(); return; }
       enterRoom(room);
     } catch (err) {
       toast('Could not create the room');
@@ -333,6 +334,7 @@ function joinScreen(prefill = '') {
         joinScreen(code);
         return;
       }
+      if (!schemaCurrent(room)) { outOfDate(); return; }
       await ctx.loadLeague(room.league);
       enterRoom(room);
     } catch {
@@ -343,6 +345,34 @@ function joinScreen(prefill = '') {
 }
 
 // ---------------------------------------------------------------- sync
+
+/**
+ * Is the database running a schema this build understands?
+ *
+ * get_room only returns draft_order if the current rooms.sql has been applied.
+ * An older one answers happily and looks fine -- right up until the draft order
+ * is not shuffled, substitutions are dropped on save, and the playoffs cannot
+ * start at all. Better to say so before fourteen rounds have been drafted than
+ * after.
+ */
+const schemaCurrent = (room) => !!room && 'draft_order' in room;
+
+function outOfDate() {
+  render(`
+    <div class="card" style="margin-top:20px;border-color:var(--red)">
+      <div class="eyebrow">Rooms are not ready</div>
+      <h2 style="font-size:18px;margin:6px 0 8px">The database needs updating</h2>
+      <p class="muted" style="font-size:13px">
+        This version of the game expects a newer room schema than the server has.
+        Until <b>supabase/rooms.sql</b> is re-run, the draft order would not be
+        shuffled, substitutions would be dropped, and the playoffs could not
+        start.</p>
+      <p class="dim" style="font-size:11.5px;margin-top:8px">
+        Solo play and the daily challenge are unaffected.</p>
+      <button class="btn ghost sm" id="back" style="width:100%;margin-top:12px">Back</button>
+    </div>`);
+  on('#back', 'click', () => ctx.back());
+}
 
 /** Adopt a room payload and start polling it. */
 function enterRoom(room) {
@@ -1208,8 +1238,15 @@ function standingsScreen() {
   on('#toplayoffs', 'click', async (e) => {
     e.currentTarget.disabled = true;
     e.currentTarget.textContent = 'Starting…';
-    try { onRoom(await startPlayoffs(R.code), R.skew); }
-    catch { toast('Could not start the playoffs'); standingsScreen(); }
+    try {
+      onRoom(await startPlayoffs(R.code), R.skew);
+    } catch {
+      // The bracket was decided the moment the draft ended -- this call only
+      // settles when the room watches it. If it cannot be made, watching alone
+      // beats a season that can never be finished.
+      toast('Could not tell the room — watching anyway');
+      playoffScreen();
+    }
   });
 }
 
