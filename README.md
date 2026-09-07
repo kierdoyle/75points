@@ -15,11 +15,14 @@ not an ASA product.
 | | URL | Notes |
 |---|---|---|
 | GitHub Pages | https://kierdoyle.github.io/75points/ | Free, no account limits. Deploys on every push to `main`. |
-| Netlify | https://75points.americansocceranalysis.com | Custom domain, but **deploys are blocked while the account is out of credits** — including prebuilt ones. |
+| Netlify | https://75points.americansocceranalysis.com | Custom domain. Auto-deploys on push through the Netlify GitHub App. |
 
-Pages is the mirror that always works; Netlify holds the nice domain. Both are
-driven from `main`, and the only difference between the two builds is the base
-path (see `vite.config.js`), because Pages serves from `/75points/`.
+Both are driven from `main` and carry the same game, rooms included; the only
+difference between the builds is the base path (see `vite.config.js`), because
+Pages serves from `/75points/`. Netlify is the one to hand people. Pages is the
+mirror that keeps working if the Netlify account runs out of credits, which
+blocks deploys outright — prebuilt uploads included — until the usage period
+rolls over.
 
 A static, mobile-first MLS spin-team game in the spirit of the [7-0 World Cup game](https://7a0.com.br/en)
 and the 82-0 NBA game. Spin your way through every MLS team-season since 2013,
