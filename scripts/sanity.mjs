@@ -14,7 +14,9 @@ import {
   SALARY_CAP, ALLOCATION_MONEY, rulesFor,
 } from '../src/rules.js';
 import { achievements } from '../src/achievements.js';
-import { loadPool, makeRng, drawSpin, currentRosters, spinKey } from '../src/pool.js';
+import {
+  loadPool, makeRng, drawSpin, currentRosters, spinKey, shuffleRoster,
+} from '../src/pool.js';
 import { openSlotsFor, blockReason, effectiveScore } from '../src/rules.js';
 import {
   simSeason, simMatch, squadStrength, LEAGUE, configureLeague,
@@ -244,6 +246,34 @@ function report(label, r, runs) {
  * than that horizontally must clear it vertically or their photos and names
  * collide.
  */
+/**
+ * A blind draft must not leak the ratings through the running order.
+ *
+ * Rosters are stored best-first, so grouping them by position leaves the best
+ * player at the top of each group -- which is the whole answer, with the
+ * numbers merely painted out.
+ */
+function checkBlindOrder() {
+  const POS = ['GK', 'CB', 'FB', 'DM', 'CM', 'AM', 'W', 'ST'];
+  let groups = 0;
+  let ranked = 0;
+  let bestFirst = 0;
+  for (const spin of pool.spins) {
+    const shuffled = shuffleRoster(spin.roster, `${spinKey(spin)}|check`);
+    for (const pos of POS) {
+      const g = shuffled.filter((p) => p.pos === pos);
+      if (g.length < 3) continue;
+      groups++;
+      const scores = g.map((p) => p.score);
+      if (scores.every((v, i) => i === 0 || scores[i - 1] >= v)) ranked++;
+      if (g[0].score === Math.max(...scores)) bestFirst++;
+    }
+    // Shuffling is a reordering and nothing else.
+    if (shuffled.length !== spin.roster.length) return { groups, ranked: groups, bestFirst: groups };
+  }
+  return { groups, ranked, bestFirst };
+}
+
 function checkFormations() {
   const CARD_W = 18; const CARD_H = 17;
   const problems = [];
@@ -368,6 +398,16 @@ function main() {
   }
   ok.push(['achievements fire but stay selective',
     quant(G.achs, 0.5) >= 1 && quant(G.achs, 0.5) <= 8, `median ${quant(G.achs, 0.5)}`]);
+
+  // Small groups come out sorted by luck often enough that neither of these can
+  // be zero; both are judged against what chance would give.
+  const blind = checkBlindOrder();
+  ok.push(['a blind board is not ordered by rating',
+    blind.ranked / blind.groups < 0.15,
+    `${((blind.ranked / blind.groups) * 100).toFixed(1)}% of groups still descending`]);
+  ok.push(['the first name on a blind board is not the best one',
+    blind.bestFirst / blind.groups < 0.4,
+    `${((blind.bestFirst / blind.groups) * 100).toFixed(1)}% of groups lead with the best`]);
 
   let failed = 0;
   for (const [name, pass, val] of ok) {

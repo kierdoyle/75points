@@ -15,6 +15,39 @@ export function makeRng(seed) {
 
 export const pick = (arr, rng) => arr[Math.floor(rng() * arr.length)];
 
+/** FNV-1a. Any stable string -> uint32 seed. */
+export function hashKey(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < String(str).length; i++) {
+    h ^= String(str).charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/**
+ * A board's roster in an order that says nothing about how good anyone is.
+ *
+ * Rosters are stored best-first, which is what the draft screen groups by
+ * position. That ordering is a second, unhidden copy of the ratings: with the
+ * numbers blanked out in Max mode and the daily, the top name in each group is
+ * still the best one, and the puzzle solves itself. On a shared board it is a
+ * different problem -- everyone is looking at the same list, so "take the top
+ * one" becomes the whole draft.
+ *
+ * Deterministic from `key`, so a daily is the same puzzle for everybody and a
+ * room shows every client the same board.
+ */
+export function shuffleRoster(roster, key) {
+  const rng = makeRng(hashKey(key));
+  const out = [...roster];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 /**
  * Expand pool.json. Each spin is a (team, season) pair with its roster;
  * roster rows are [player_id, posIdx, score, minutes, isDP].

@@ -17,7 +17,7 @@
 // guarantee that a legal pick exists on every board, not a low probability of
 // getting stuck.
 
-import { makeRng, pick, spinKey } from './pool.js';
+import { makeRng, pick, spinKey, hashKey } from './pool.js';
 import {
   FORMATIONS, SQUAD_SIZE, rulesFor, makeSquad, blockReason, openSlotsFor,
   effectiveScore, canPlay,
@@ -37,16 +37,6 @@ export function shiftKey(key, days) {
   const d = new Date(`${key}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return todayKey(d);
-}
-
-/** FNV-1a. Any stable string -> uint32 seed. */
-function hashSeed(str) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
 }
 
 /**
@@ -120,7 +110,7 @@ export function buildDaily(pool, league, dateKey, difficulty = 'max') {
   const rules = rulesFor(difficulty, league);
 
   for (let attempt = 0; attempt < 200; attempt++) {
-    const rng = makeRng(hashSeed(`${dateKey}|${league}|${attempt}`));
+    const rng = makeRng(hashKey(`${dateKey}|${league}|${attempt}`));
     const formation = FORMATION_NAMES[Math.floor(rng() * FORMATION_NAMES.length)];
     // Drawn for every league so the rng sequence stays identical; only leagues
     // with conferences actually use it.
@@ -146,7 +136,7 @@ export function buildDaily(pool, league, dateKey, difficulty = 'max') {
 
 /** A separate rng for the season, so match luck doesn't depend on the draft. */
 export function dailySimRng(dateKey, league) {
-  return makeRng(hashSeed(`${dateKey}|${league}|season`));
+  return makeRng(hashKey(`${dateKey}|${league}|season`));
 }
 
 // ---------------------------------------------------------------- metrics

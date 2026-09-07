@@ -8,7 +8,9 @@ import {
 import { achievements } from './achievements.js';
 import { buildCard } from './exportcard.js';
 import { draftEfficiency } from './optimal.js';
-import { loadPool, makeRng, drawSpin, annotate, pick, currentRosters, spinKey } from './pool.js';
+import {
+  loadPool, makeRng, drawSpin, annotate, pick, currentRosters, spinKey, shuffleRoster,
+} from './pool.js';
 import { simSeason, squadStrength, configureLeague, LEAGUE } from './sim.js';
 import { logPlay, flushQueue, dataVersion } from './logging.js';
 // Content-hashed URLs, not the data itself -- these are fetched on demand.
@@ -537,8 +539,20 @@ function slotOptions(player) {
     : openSlotsFor(player, S.squad);
 }
 
+/**
+ * The board's players, in the order they should be read.
+ *
+ * Best-first is helpful when the ratings are on show and a giveaway when they
+ * are not, so a blind draft gets them shuffled instead. Keyed on the board and
+ * the run, so a daily is the same puzzle for everyone who plays it.
+ */
+function boardRoster(spin) {
+  if (!hidden()) return spin.roster;
+  return shuffleRoster(spin.roster, `${spinKey(spin)}|${S.daily ? S.daily.dateKey : S.seed}`);
+}
+
 function spinPane(spin, animate = false) {
-  const roster = annotate(spin.roster, S.squad, S.picked, S.rules)
+  const roster = annotate(boardRoster(spin), S.squad, S.picked, S.rules)
     .map((p) => (!p.blocked && S.daily && !slotOptions(p).length
       ? { ...p, blocked: 'Dead end' } : p));
   const order = ['GK', 'CB', 'FB', 'DM', 'CM', 'AM', 'W', 'ST'];

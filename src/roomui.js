@@ -11,7 +11,7 @@ import {
   SQUAD_SIZE, SLOT_LABEL, FORMATIONS, DIFFICULTIES, rulesFor, countDPs,
   openSlotsFor, effectiveScore, blockReason, budget, SALARY_CAP, swapTargets,
 } from './rules.js';
-import { makeRng, spinKey, currentRosters, annotate } from './pool.js';
+import { makeRng, spinKey, currentRosters, annotate, shuffleRoster } from './pool.js';
 import { LEAGUE, squadStrength } from './sim.js';
 import { simRoom, roomLeaderboard } from './roomsim.js';
 import { achievements } from './achievements.js';
@@ -691,7 +691,13 @@ function boardPane(board, squad) {
         </div>
       </div>`;
   }
-  const roster = annotate(board.roster, squad, R.state.taken, R.rules);
+  // Always shuffled in a room, not only when the ratings are hidden. The board
+  // is shared, so a best-first list makes every pick the same obvious one and
+  // the draft stops being a decision.
+  const roster = annotate(
+    shuffleRoster(board.roster, `${R.room.seed}|${spinKey(board)}`),
+    squad, R.state.taken, R.rules,
+  );
   const order = ['GK', 'CB', 'FB', 'DM', 'CM', 'AM', 'W', 'ST'];
   const groups = order.map((pos) => [pos, roster.filter((p) => p.pos === pos)])
     .filter(([, list]) => list.length);

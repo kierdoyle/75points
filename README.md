@@ -46,6 +46,12 @@ be nearly impossible — even a perfectly drafted squad wins about 6% of the tim
    Max drafts blind: no g+ on the players, no percentile on the coaches, no
    projected points. Everything is revealed the moment the season kicks off.
 
+   Blind boards are also **shuffled**. Rosters are stored best-first, so
+   grouping them by position would leave the best player at the top of every
+   group — the whole answer, with the numbers merely painted out. The order is
+   derived from the board and the day, so a daily is still the same puzzle for
+   everyone playing it.
+
    There is no public NWSL salary data, so that league has no Designated
    Players and no cap — its difficulties differ **only** in rerolls.
 
@@ -75,6 +81,9 @@ The shape of it:
   out on top genuinely out-drafted the room rather than out-spun it.
 * **The draft order is drawn at random** when the host starts, not taken from
   the order people arrived in — otherwise the host would open every draft.
+* **Boards are shuffled**, always, not only when ratings are hidden. Everyone
+  is reading the same list, so a best-first one would make every pick the
+  obvious top name and stop the draft being a decision.
 * **A player taken is gone.** Room-wide, for the rest of the draft. That is
   enforced by a unique index in the database, not by the browser, so two people
   tapping the same name at the same instant resolve to exactly one owner and
