@@ -211,7 +211,7 @@ function createScreen() {
       </div>
       <div class="card">
         <div class="eyebrow">League</div>
-        <div class="opts two" style="margin-top:8px" data-group="league">
+        <div class="opts${Object.keys(ctx.leagues).length === 2 ? ' two' : ''}" style="margin-top:8px" data-group="league">
           ${Object.values(ctx.leagues).map((l) => `
             <button class="opt" data-val="${l.key}" aria-pressed="${CREATE.league === l.key}">
               <b>${l.label}</b><span>${l.key === 'mls' ? 'Two conferences' : 'Single table'}</span>
@@ -231,7 +231,8 @@ function createScreen() {
           Rerolls do not apply in a room — the board is shared, so there is
           nothing to reroll.${CREATE.league === 'mls'
     ? ' Difficulty sets the DP limit and the salary cap.'
-    : ' There is no public NWSL salary data, so only Max changes anything here: it hides the ratings.'}</p>
+    : ` There is no public ${esc(ctx.leagues[CREATE.league].label)} salary data, so only Max changes`
+      + ' anything here: it hides the ratings.'}</p>
       </div>
       <div class="card">
         <div class="eyebrow">Seconds per pick</div>

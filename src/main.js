@@ -18,6 +18,8 @@ import mlsPoolUrl from './data/pool.json?url';
 import mlsSimUrl from './data/sim.json?url';
 import nwslPoolUrl from './data/nwsl-pool.json?url';
 import nwslSimUrl from './data/nwsl-sim.json?url';
+import uslPoolUrl from './data/usl-pool.json?url';
+import uslSimUrl from './data/usl-sim.json?url';
 import {
   todayKey, buildDaily, dailySimRng, boardReport, fieldDistribution, percentileOf,
   safeSlots,
@@ -44,7 +46,14 @@ const LEAGUES = {
          pool: mlsPoolUrl, sim: mlsSimUrl },
   nwsl: { key: 'nwsl', label: 'NWSL', blurb: 'Every NWSL team-season since 2016',
           pool: nwslPoolUrl, sim: nwslSimUrl },
+  // The Championship and League One are drafted as one pool: two tiers, one
+  // slot machine, and a 2026 table they all share.
+  usl: { key: 'usl', label: 'USL', blurb: 'Every USL Championship and League One team-season since 2017',
+         pool: uslPoolUrl, sim: uslSimUrl },
 };
+
+// Three leagues fit the three-up grid; two would want the wider pair.
+const leagueCols = Object.keys(LEAGUES).length === 2 ? ' two' : '';
 
 const S = {
   pool: null, sim: null, rosters: null, loaded: null,
@@ -119,7 +128,7 @@ function setupScreen() {
       ${roomCard()}
       <div class="card">
         <div class="eyebrow">League</div>
-        <div class="opts two" style="margin-top:8px" data-group="league">
+        <div class="opts${leagueCols}" style="margin-top:8px" data-group="league">
           ${Object.values(LEAGUES).map((l) => `
             <button class="opt" data-val="${l.key}" aria-pressed="${S.league === l.key}">
               <b>${l.label}</b><span>${l.key === S.league ? `${LEAGUE.target} points` : 'switch'}</span>
@@ -250,7 +259,7 @@ function dailyCard() {
       <p class="dim" style="font-size:11.5px;margin:8px 0 10px">
         The same 14 club-seasons and the same formation for everyone, ratings hidden,
         no rerolls. One attempt each.</p>
-      <div class="opts two" style="margin-top:2px">
+      <div class="opts${leagueCols}" style="margin-top:2px">
         ${Object.values(LEAGUES).map((l) => {
     const done = dailyDone(l.key, key);
     return `<button class="opt daily-go" data-league="${l.key}">
@@ -839,7 +848,7 @@ function seasonScreen() {
           <b class="mono" id="pace" style="font-size:13px">—</b></div>
       </div>
       <div class="pace"><i id="bar" style="width:0%"></i><u id="tick" style="left:0%"></u></div>
-      <div class="dim" style="font-size:11px;margin-top:6px">Gold tick = the 75-point pace line</div>
+      <div class="dim" style="font-size:11px;margin-top:6px">Gold tick = the ${LEAGUE.target}-point pace line</div>
     </div>
     <div class="controls">
       <button class="btn ghost sm" id="speed">▶ 1×</button>

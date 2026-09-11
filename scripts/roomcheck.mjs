@@ -24,8 +24,10 @@ import { simRoom, roomLeaderboard } from '../src/roomsim.js';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (f) => JSON.parse(fs.readFileSync(path.join(root, '..', 'src', 'data', f)));
 
-const LEAGUE_KEY = process.argv.find((a) => a === 'nwsl') ? 'nwsl' : 'mls';
-const FILES = LEAGUE_KEY === 'nwsl' ? ['nwsl-pool.json', 'nwsl-sim.json'] : ['pool.json', 'sim.json'];
+const LEAGUE_KEY = process.argv.find((a) => ['nwsl', 'usl'].includes(a)) || 'mls';
+const FILES = LEAGUE_KEY === 'mls'
+  ? ['pool.json', 'sim.json']
+  : [`${LEAGUE_KEY}-pool.json`, `${LEAGUE_KEY}-sim.json`];
 const pool = loadPool(read(FILES[0]));
 const sim = read(FILES[1]);
 configureLeague({
@@ -291,24 +293,36 @@ function main() {
 
   // --------------------------------------------------------------- balance
   console.log('\nbalance (8-seat rooms, best-available bots)');
-  const pointsBySeat = new Array(8).fill(0);
-  const strengthBySeat = new Array(8).fill(0);
-  const RUNS = 12;
+  // Measured by draft position, not by seat. The order is shuffled now, so a
+  // seat number carries no information at all -- averaging by seat would be
+  // averaging noise, and with a season's ~10-point spread over a handful of
+  // rooms it would fail or pass at random.
+  //
+  // Squad g+ rather than points for the same reason: the snake acts on what
+  // you draft, and a simulated season on top of that is mostly dice. Position
+  // 1 and position 8 pick back-to-back at the turn, so they do come out ahead;
+  // the property worth holding is that the gap stays modest.
+  const RUNS = 40;
+  const strengthByPos = new Array(8).fill(0);
+  const pointsByPos = new Array(8).fill(0);
   let winners = 0;
   for (let n = 0; n < RUNS; n++) {
     const seed = 4200 + n * 13;
     const { room, rules } = runDraft({ seats: 8, seed });
     const s = seasonFor(room, rules, seed);
+    const order = draftOrder(room);
     for (const [seat, r] of s.bySeat) {
-      pointsBySeat[seat] += r.points / RUNS;
-      strengthBySeat[seat] += r.strength / RUNS;
+      const pos = order.indexOf(seat);
+      strengthByPos[pos] += r.strength / RUNS;
+      pointsByPos[pos] += r.points / RUNS;
       if (r.won) winners++;
     }
   }
-  const spread = Math.max(...pointsBySeat) - Math.min(...pointsBySeat);
-  console.log(`  seat points  ${pointsBySeat.map((p) => p.toFixed(0)).join('  ')}`);
-  console.log(`  seat g+      ${strengthBySeat.map((p) => p.toFixed(1)).join('  ')}`);
-  check('no seat is systematically favoured', spread < 12, `spread ${spread.toFixed(1)} pts`);
+  console.log(`  pick 1-8 g+   ${strengthByPos.map((p) => p.toFixed(1).padStart(5)).join(' ')}`);
+  console.log(`  pick 1-8 pts  ${pointsByPos.map((p) => p.toFixed(0).padStart(5)).join(' ')}`);
+  const spread = Math.max(...strengthByPos) - Math.min(...strengthByPos);
+  check('the snake keeps draft positions close', spread < 10,
+    `${spread.toFixed(1)} g+ between the best and worst position`);
   check('the target stays hard for bots', winners <= RUNS,
     `${winners} wins in ${RUNS * 8} club-seasons`);
 

@@ -19,7 +19,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from leagues import LEAGUES, cache_name, out_name
+from leagues import LEAGUES, cache_name, finished_regular, has_events, out_name
 
 # ---------------------------------------------------------------- constants
 
@@ -87,7 +87,34 @@ def load(stem):
 
 
 def load_events():
-    """{season: {player_name: [mean_y, touches, goals, assists]}}."""
+    """{season: {player_name: [mean_y, touches, goals, assists]}}.
+
+    A league with no event feed is rebuilt from the xgoals table, which carries
+    goals and assists but nothing positional. Those entries declare zero
+    touches, which is how side_of() reads "no established flank" -- so USL
+    players may take either side at full strength, while their scoring records
+    still drive who the sim puts on the scoresheet.
+    """
+    if not has_events(LEAGUE):
+        players = load("players")
+        name_by_id = dict(zip(players["player_id"], players["player_name"]))
+        out = {}
+        for season in SEASONS:
+            path = os.path.join(CACHE, cache_name(LEAGUE, f"pxg_{season}") + ".pkl")
+            if not os.path.exists(path):
+                continue
+            px = load(f"pxg_{season}")
+            season_out = {}
+            for _, r in px.iterrows():
+                nm = name_by_id.get(r["player_id"])
+                if not nm:
+                    continue
+                # One row per club, so a player who moved mid-season is summed.
+                e = season_out.setdefault(nm, [50.0, 0, 0, 0])
+                e[2] += int(r["goals"] or 0)
+                e[3] += int(r["primary_assists"] or 0)
+            out[season] = season_out
+        return out
     name = cache_name(LEAGUE, "events_summary") + ".json"
     path = os.path.join(CACHE, name)
     if not os.path.exists(path):
@@ -128,7 +155,7 @@ def team_games_played():
     gp, pts = {}, {}
     for season in SEASONS:
         g = load(f"games_{season}")
-        g = g[(g["status"] == "FullTime") & (~g["knockout_game"].astype(bool))]
+        g = finished_regular(g)
         season_gp, season_pts = {}, {}
         for _, row in g.iterrows():
             h, a = row["home_team_id"], row["away_team_id"]
@@ -383,7 +410,7 @@ def main():
     tot_goals = tot_games = home_goals = away_goals = 0
     for season in CALIB_SEASONS:
         g = load(f"games_{season}")
-        g = g[(g["status"] == "FullTime") & (~g["knockout_game"].astype(bool))]
+        g = finished_regular(g)
         for _, r in g.iterrows():
             hs, as_ = int(r["home_score"]), int(r["away_score"])
             tot_goals += hs + as_
@@ -401,7 +428,7 @@ def main():
     best_pts = best_gf = best_w = 0
     for season in CALIB_SEASONS:
         g = load(f"games_{season}")
-        g = g[(g["status"] == "FullTime") & (~g["knockout_game"].astype(bool))]
+        g = finished_regular(g)
         gf, wins = {}, {}
         for _, r in g.iterrows():
             ht, at = r["home_team_id"], r["away_team_id"]

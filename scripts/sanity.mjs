@@ -25,10 +25,11 @@ import {
 const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (f) => JSON.parse(fs.readFileSync(path.join(root, '..', 'src', 'data', f)));
 
-// `npm run sanity -- nwsl` checks the other league.
-const LEAGUE_KEY = process.argv.find((a) => a === 'nwsl') ? 'nwsl' : 'mls';
-const FILES = LEAGUE_KEY === 'nwsl'
-  ? ['nwsl-pool.json', 'nwsl-sim.json'] : ['pool.json', 'sim.json'];
+// `npm run sanity -- nwsl` (or usl) checks another league.
+const LEAGUE_KEY = process.argv.find((a) => ['nwsl', 'usl'].includes(a)) || 'mls';
+const FILES = LEAGUE_KEY === 'mls'
+  ? ['pool.json', 'sim.json']
+  : [`${LEAGUE_KEY}-pool.json`, `${LEAGUE_KEY}-sim.json`];
 const pool = loadPool(read(FILES[0]));
 const sim = read(FILES[1]);
 configureLeague({
@@ -385,8 +386,17 @@ function main() {
     hardMean < normalMean && quant(H.pts, 0.5) <= quant(modes.normal.pts, 0.5),
     `hard ${hardMean.toFixed(1)} vs normal ${normalMean.toFixed(1)} pts `
       + `(medians ${quant(H.pts, 0.5)}/${quant(modes.normal.pts, 0.5)})`]);
-  ok.push(['easy mode is the easiest', quant(modes.easy.pts, 0.5) >= quant(modes.normal.pts, 0.5),
-    `easy ${quant(modes.easy.pts, 0.5)} pts`]);
+  // Judged on the squad, not the season. Difficulty only ever acts on the
+  // draft, and a season adds ~10 points of standard deviation on top of it --
+  // with 500 runs the median points gap between two adjacent difficulties is
+  // smaller than its own error bar, so asserting on points tests the dice.
+  // Where difficulty has no DP limit or cap to work with, as outside MLS,
+  // rerolls are the whole of the effect and it shows up in strength alone.
+  ok.push(['easy mode drafts the strongest squads',
+    quant(modes.easy.strength, 0.5) >= quant(modes.normal.strength, 0.5),
+    `easy ${quant(modes.easy.strength, 0.5).toFixed(2)} vs normal `
+      + `${quant(modes.normal.strength, 0.5).toFixed(2)} spg `
+      + `(${quant(modes.easy.pts, 0.5)} vs ${quant(modes.normal.pts, 0.5)} pts)`]);
   if (LEAGUE_KEY === 'mls') {
     ok.push(['every hard-mode squad is cap compliant', H.gam.every((g) => g <= ALLOCATION_MONEY),
       `max ${Math.max(...H.gam).toLocaleString()} / ${ALLOCATION_MONEY.toLocaleString()}`]);

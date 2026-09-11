@@ -22,7 +22,7 @@ import sys
 
 import pandas as pd
 
-from leagues import LEAGUES, cache_name
+from leagues import LEAGUES, cache_name, finished_regular
 
 CACHE = os.path.join(os.path.dirname(__file__), ".cache")
 
@@ -74,7 +74,7 @@ def main():
         off_pct = percentile(list(zip(txg["team_id"], txg["xgoals_for"])), None, True)
         def_pct = percentile(list(zip(txg["team_id"], txg["xgoals_against"])), None, False)
 
-        reg = games[(games["status"] == "FullTime") & (~games["knockout_game"].astype(bool))]
+        reg = finished_regular(games)
 
         # games each manager took charge of, per club
         managed = {}

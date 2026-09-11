@@ -2,8 +2,10 @@
 
 **Live:** https://kierdoyle.github.io/75points/
 
-Two leagues, both chasing **75 points**. Pick one on the setup screen; each
-ships its own player pool, coaches, calibration and playoff format.
+Three leagues — MLS, the NWSL, and USL's two tiers drafted as one — each
+chasing one point more than its own all-time record. Pick one on the setup
+screen; each ships its own player pool, coaches, calibration and playoff
+format.
 
 Styled in [American Soccer Analysis](https://www.americansocceranalysis.com/)
 livery — their blue (`#20b0e0`) and red (`#c02030`), sampled from the ASA
@@ -124,8 +126,9 @@ in the NWSL, where there is no public salary data, only Max changes anything at
 all (it hides the ratings). Coaches are dealt three each off one shuffled list,
 so no two clubs in a room can appoint the same one.
 
-Both leagues run rooms. An NWSL room plays the single table and its straight
-knockout bracket, so everyone in the room meets home and away.
+Every league runs rooms. In a single-table league — the NWSL, or USL — the room
+plays that one table and its straight knockout bracket, so everyone in the room
+meets home and away.
 
 Nothing about a room is stored beyond the code, the seed and the ordered list of
 picks — the squads, the coach shortlists and the entire season are *derived*
@@ -155,29 +158,51 @@ The coach is a mild net buff — choosing from a shortlist skews the draw above
 the median, and the trophy bonuses only ever add — but at 2.5% the effect is
 small enough not to distort the target.
 
-## The two leagues
+## The three leagues
 
-|  | MLS | NWSL |
-|---|---|---|
-| Seasons in the pool | 2013–2026 | 2016–2026 |
-| Minutes floor | 500 | 250 |
-| Season | 34 games, two conferences | 30 games, single table |
-| Target | 75 points | 75 points |
-| Playoffs | top 8 **per conference**, best-of-3 round one, then knockout | top 8 **overall**, straight knockout |
-| Designated Players / cap | yes | no |
+|  | MLS | NWSL | USL |
+|---|---|---|---|
+| Seasons in the pool | 2013–2026 | 2016–2026 | 2017–2026 |
+| Minutes floor | 500 | 250 | 400 |
+| Season | 34 games, two conferences | 30 games, single table | 34 games, single table |
+| Target | 75 points | 75 points | **79 points** |
+| Playoffs | top 8 **per conference**, best-of-3 round one, then knockout | top 8 **overall**, straight knockout | top 8 **overall**, straight knockout |
+| Designated Players / cap | yes | no | no |
+| Flanks | from the event feed | from the event feed | not available |
 
-Both leagues target 75. In the NWSL that is a genuinely steeper ask: Kansas
-City's record 65 points came in a 26-game season, a 2.50-per-game pace, and 75
-over 30 games is exactly that pace again — where MLS's 75 over 34 is 2.21. A
-flawless draft takes 75 and the trophy about **9.8%** of the time in MLS on
-normal, against **1.8%** in the NWSL. Around 70 would put the two on equal
-footing if that asymmetry ever grates.
+The target is always one point past what the league has actually managed. MLS's
+record is 74, the NWSL's 65 in a 26-game season — a 2.50-per-game pace that 75
+over 30 games reproduces exactly — and USL's is Phoenix Rising's 78 in 2019, so
+USL is a road to **79**. Every screen reads the number from the league's data
+file, so the game renames itself.
+
+A flawless draft takes the target and the trophy about **9.8%** of the time in
+MLS on normal, **2.6%** in USL and **1.8%** in the NWSL.
 
 Everything else is measured per league rather than shared: each has its own
 calibration fit, its own scoring environment (MLS averages 1.46 goals per team
-per game with a +0.52 home edge; the NWSL 1.32 and +0.27), its own tuned
-strength coefficient, and its own single-season records driving the
-achievements.
+per game with a +0.52 home edge; USL 1.42 and +0.37; the NWSL 1.32 and +0.27),
+its own tuned strength coefficient, and its own single-season records driving
+the achievements.
+
+### USL is two tiers in one pool
+
+The Championship and League One are drafted together rather than split out, so a
+board can land on 2019 Phoenix Rising or on this year's Union Omaha, and all
+forty-odd clubs share one 2026 table. Two things follow from the data ASA
+publishes for them:
+
+* **No salary data**, as in the NWSL, so no Designated Players and no cap —
+  outside MLS, difficulty is rerolls and whether the ratings are hidden.
+* **No event feed.** Goals and assists come from the xgoals table instead, so
+  the sim still knows who scores, but nobody has an established flank: a USL
+  full back or winger plays either side at full strength. The g+ ratings
+  themselves are unaffected — they come from the same goals-added tables as
+  every other league.
+
+Season lengths differ between the tiers (34 games and about 30), which the
+calibration handles by fitting on points *per game*; the pool pro-rates both to
+the 34-game slate the sim plays.
 
 ## Squad screen
 
@@ -398,11 +423,18 @@ Rebuilding the data (needs the ASA client — `pip install itscalledsoccer panda
 python scripts/fetch_raw.py      mls   # caches the ASA API responses
 python scripts/build_events.py   mls   # event CSVs -> sides, goals, assists
 python scripts/build_coaches.py  mls   # rates coaches and finds their trophies
-python scripts/build_data.py     mls   # writes public/data/{pool,sim}.json
+python scripts/build_data.py     mls   # writes src/data/{pool,sim}.json
 ```
 
-Swap `mls` for `nwsl` to rebuild the other league (into `nwsl-pool.json` and
-`nwsl-sim.json`). Per-league settings live in `scripts/leagues.py`.
+Swap `mls` for `nwsl` or `usl` to rebuild another league. Per-league settings
+live in `scripts/leagues.py`; `usl` pulls both `uslc` and `usl1` and
+concatenates them, and skips `build_events.py` entirely since no event CSVs
+exist for it.
+
+`fetch_raw.py` takes seasons: `fetch_raw.py mls 2026` refreshes only the year in
+progress, which is all a mid-season update needs — the finished seasons are
+never going to change, and re-pulling fourteen of them costs a few hundred
+requests for nothing.
 
 `build_events.py` reads the season event CSVs (`{year}MLS_events.csv`), which
 live outside this repo because they are ~400 MB each; pass their directory as
